@@ -1,13 +1,17 @@
 [project]
 name = "tradingbot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Crypto trading bot — BTC perpetual futures on Kraken Futures"
 readme = "README.md"
 authors = [
     { name = "Ddvos", email = "de-dominique@hotmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "fastapi[standard]>=0.136.3",
+    "httpx>=0.28.1",
+    "polars>=1.41.0",
+]
 
 [project.scripts]
 tradingbot = "tradingbot:main"
@@ -15,3 +19,78 @@ tradingbot = "tradingbot:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# ----------------------------------------------------------------------------
+# Dev tooling — install with `uv sync --group dev`
+# ----------------------------------------------------------------------------
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.16.0",
+    "ruff>=0.6.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+]
+
+# ----------------------------------------------------------------------------
+# basedpyright — static type checker (strict)
+# Run: `uv run basedpyright`
+# ----------------------------------------------------------------------------
+
+[tool.basedpyright]
+include = ["src", "tests"]
+exclude = ["**/__pycache__", "**/.venv", "data"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = "warning"      # third-party libs sometimes lack stubs
+reportImplicitOverride = "error"        # silent override mismatches are bugs
+reportUnusedCallResult = "none"         # noisy in pytest fixtures
+reportAny = "warning"                   # flag Any-leaks but don't block builds
+
+# ----------------------------------------------------------------------------
+# ruff — linter + formatter
+# Run: `uv run ruff check` / `uv run ruff format`
+# ----------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # isort (import sorting)
+    "N",             # pep8-naming
+    "UP",            # pyupgrade (modern syntax)
+    "B",             # bugbear (common bug patterns)
+    "A",             # flake8-builtins (shadowing builtins)
+    "C4",            # comprehensions
+    "DTZ",           # datetime tz-aware enforcement (critical for trading)
+    "T20",           # no print() statements
+    "SIM",           # simplify
+    "RET",           # return statement hygiene
+    "PT",            # pytest style
+    "PL",            # pylint subset
+    "RUF",           # ruff-specific
+]
+ignore = [
+    "PLR0913",       # too many args — sometimes unavoidable in config models
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004", "S101"]   # magic values + assert allowed in tests
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ----------------------------------------------------------------------------
+# pytest
+# ----------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]

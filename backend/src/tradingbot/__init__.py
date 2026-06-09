@@ -1,2 +1,2 @@
 def main() -> None:
-    print("Hello from tradingbot!")
+    """CLI entry point — filled in Slice 0 (backfill/backtest). See ROADMAP.md."""
