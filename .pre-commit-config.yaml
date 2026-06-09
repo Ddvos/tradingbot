@@ -1,0 +1,38 @@
+# Pre-commit hooks for tradingbot.
+# Install once: `uv run pre-commit install` (or `pre-commit install` if installed globally)
+# Run manually on all files: `uv run pre-commit run --all-files`
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^backend/.*\.py$
+      - id: ruff-format
+        files: ^backend/.*\.py$
+
+  # basedpyright runs in the project's own uv env so it can find installed
+  # libraries (polars, pydantic, ...) and their type stubs. A separate
+  # pre-commit env would miss those.
+  - repo: local
+    hooks:
+      - id: basedpyright
+        name: basedpyright (strict type check)
+        entry: uv run --directory backend basedpyright
+        language: system
+        types: [python]
+        files: ^backend/.*\.py$
+        pass_filenames: false

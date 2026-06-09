@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# uv / virtualenv
+.venv/
+
+# Env & secrets (keep .env.example in git)
+.env
+.env.*
+!.env.example
+
+# Local data & model artifacts (see CLAUDE.md — data is local, not in git)
+data/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.basedpyright/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
