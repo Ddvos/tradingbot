@@ -466,12 +466,12 @@ class MarketDataProvider(Protocol):                      # Protocol for ports
 *where we are* and *what the next step is*. Update `ROADMAP.md` in the same
 commit as the code.
 
-In short (as of 9 Jun 2026): foundation done — tooling (ruff + basedpyright
-strict + pytest + pre-commit), `.gitignore`s, `configs/strategies/`, and the
-full package skeleton with a documented `__init__.py` per layer. Architecture
-recorded in **ADR-001** (_thin_ Hexagonal). **Next step:** Slice 0 — walking
-skeleton (real BTC data → Parquet → buy-and-hold backtest → Sharpe + equity
-curve).
+In short (as of 2 Jul 2026): foundation + **Slice 0 done** — the walking
+skeleton runs end-to-end (Kraken → Parquet → buy-and-hold backtest → Sharpe
+0.42 / max DD −67.2% over 2022–2026 as the baseline to beat). Tooling: ruff +
+basedpyright strict + pytest + pre-commit + CI. Architecture recorded in
+**ADR-001** (_thin_ Hexagonal). **Next step:** Slice 1 — features + rule-based
+MA-cross strategy with realistic costs.
 
 ## External references
 
