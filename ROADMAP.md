@@ -18,26 +18,38 @@
 
 ---
 
-## Current status — 2026-06-09
+## Current status — 2026-07-02
 
-**Phase:** foundation laid, ready to build **Slice 0** (walking skeleton).
+**Phase:** Slice 0 done — the walking skeleton runs end-to-end on real data.
 
 Done:
 
 - ✅ Architecture & approach decided — see **ADR-001** below: *thin* Hexagonal
   core + VSA api.
 - ✅ Backend project init (`uv`, Python 3.13). Tooling: ruff + basedpyright
-  (strict) + pytest + pre-commit.
+  (strict) + pytest + pre-commit + GitHub Actions CI.
 - ✅ Project skeleton: package structure with a documented `__init__.py` per
   layer (import rules live in the docstrings).
 - ✅ `.gitignore`s + `configs/strategies/`.
 - ✅ Frontend skeleton (SvelteKit + Svelte 5, bare).
+- ✅ **Slice 0** (2 Jul 2026): ports (`MarketDataProvider`, `OrderExecutor`),
+  Kraken charts adapter with pagination, ParquetStore with idempotent upsert,
+  SimulatedExecutor (Decimal fees + slippage), buy-and-hold BacktestEngine,
+  Sharpe/max-drawdown metrics, backfill + backtest CLIs, 20 tests.
 
-Nothing yet of: business logic, adapters, backtest, ML, API routes, live runner.
-That's what the slices below build up.
+**The honest number:** PF_XBTUSD 1h buy-and-hold, 2022-03-23 → 2026-07-02
+(37,499 bars, full available history): **Sharpe 0.42, max drawdown −67.2%**,
+€10,000 → €14,482 with pessimistic costs (0.05% taker fee, 0.1% slippage).
+That is the baseline every strategy must beat.
 
-**Next step:** Slice 0 — one honest number out of the pipeline (buy-and-hold
-Sharpe on real BTC data).
+**Data depth finding (2 Jul 2026):** the Kraken Futures charts API serves
+PF_XBTUSD 1h candles from **2022-03-23** only (~4.3 years, no gaps). Enough
+for Slice 0–2; tight for the ~2-year walk-forward windows in Slice 3. If more
+history is needed for model development, consider Kraken spot XBT/USD as a
+supplementary training corpus (decide in Slice 3, not now).
+
+**Next step:** Slice 1 — features + first rule-based strategy (MA-cross) with
+realistic costs.
 
 ---
 
@@ -88,7 +100,7 @@ A slice is done only when:
 
 ## The roadmap
 
-### Slice 0 — Walking skeleton: one honest number ⬜
+### Slice 0 — Walking skeleton: one honest number ✅
 
 **Goal:** prove the whole pipeline end-to-end — no ML, no DB, no API. Real BTC
 1h data → Parquet → buy-and-hold backtest → Sharpe + equity curve. Also the
@@ -96,21 +108,24 @@ empirical test of whether the thin-Hexagonal boundary feels comfortable.
 
 **Deliverables:**
 
-- [ ] `core/ports/market_data.py` — `MarketDataProvider` Protocol
-      (`fetch_ohlcv(symbol, timeframe, since) -> pl.DataFrame`)
-- [ ] `core/ports/executor.py` — `OrderExecutor` Protocol
-- [ ] `adapters/kraken/provider.py` — `KrakenProvider.fetch_ohlcv` (httpx,
-      pagination, schema validation at entry)
-- [ ] `adapters/parquet/store.py` — `ParquetStore`: read/write with schema +
+- [x] `core/ports/market_data.py` — `MarketDataProvider` Protocol
+      (`fetch_ohlcv(symbol, timeframe, since) -> pl.DataFrame`) + OHLCV schema
+      contract + `validate_ohlcv`
+- [x] `core/ports/executor.py` — `OrderExecutor` Protocol + `Side`,
+      `OrderRequest`, `Fill`, `OrderId`
+- [x] `adapters/kraken/provider.py` — `KrakenProvider.fetch_ohlcv` (httpx,
+      pagination via `more_candles`, Pydantic validation at entry)
+- [x] `adapters/parquet/store.py` — `ParquetStore`: read/write with schema +
       invariants (sorted, no dupes, UTC) + idempotent backfill semantics
-- [ ] `adapters/simulated/executor.py` — `SimulatedExecutor` (fill at close,
+- [x] `adapters/simulated/executor.py` — `SimulatedExecutor` (fill at close,
       fees + slippage in `Decimal`)
-- [ ] `core/backtest/engine.py` — minimal `BacktestEngine` (buy-and-hold)
-- [ ] `core/backtest/metrics.py` — Sharpe, max drawdown, equity curve
-- [ ] `application/run_backtest.py` — wires Parquet + Simulated + buy-and-hold
-- [ ] `scripts/backfill.py` — CLI: PF_XBTUSD 1h → Parquet (idempotent, re-runnable)
-- [ ] Tests: store invariants, metrics, engine happy path
-- [ ] Add dep: `pydantic` explicitly (now only transitive via FastAPI)
+- [x] `core/backtest/engine.py` — minimal `BacktestEngine` (buy-and-hold)
+- [x] `core/backtest/metrics.py` — Sharpe, max drawdown, equity curve
+- [x] `application/run_backtest.py` — wires Parquet + Simulated + buy-and-hold
+- [x] `scripts/backfill.py` — CLI: PF_XBTUSD 1h → Parquet (idempotent, re-runnable)
+      (+ `scripts/backtest.py` — prints the report, writes the equity curve)
+- [x] Tests: store invariants, metrics, engine happy path (20 tests)
+- [x] Add dep: `pydantic` explicitly (now only transitive via FastAPI)
 
 **Done when:** `scripts/backfill.py` writes
 `backend/data/raw/ohlcv/PF_XBTUSD/1h.parquet`; a backtest prints buy-and-hold
@@ -136,7 +151,8 @@ buy-and-hold.
 - [ ] `core/risk/sizing.py` — `position_size(balance, atr, risk_pct) -> Decimal`
 - [ ] `core/backtest/engine.py` — extended: entries/exits, stop (1.5×ATR) +
       TP (3.0×ATR), time exit (6 bars), one position at a time, fees + slippage +
-      funding costs
+      funding costs (Slice 1 uses a flat, conservative funding assumption —
+      real funding-rate data arrives in Slice 3)
 - [ ] Tests per feature + engine behavior
 
 **Done when:** the MA-cross backtest runs with realistic costs; metrics
@@ -292,12 +308,18 @@ The canonical (extended) structure + data layout: see `CLAUDE.md`.
 - ADR-001: *thin* Hexagonal (see above).
 - Postgres deferred to Slice 4; backtests/ML run on Parquet + filesystem.
 - `ROADMAP.md` = living progress; `CLAUDE.md` = workflow/conventions.
+- Slice 0 verdict on the architecture smoke test (2 Jul 2026): the port
+  boundary is *not* heavy — core imports nothing from adapters, the engine
+  feeds the SimulatedExecutor via an `on_bar` callable wired in `application/`.
+  Keep as is.
+- Funding costs: flat conservative assumption in Slice 1; real funding-rate
+  data (`data/raw/funding/{symbol}.parquet`) in Slice 3 (2 Jul 2026).
 
 **Open (decide later, not now):**
 
 - SQLAlchemy 2.0 vs SQLModel → decide in Slice 4.
-- Funding-rate data (`data/raw/funding/{symbol}.parquet`) + adapter → needed
-  once the backtest includes funding costs (Slice 1/3). Parked for now.
+- Supplementary training data (Kraken spot XBT/USD) if 4.3y of PF_XBTUSD is too
+  little for walk-forward → decide in Slice 3.
 - Alerting channel (email vs Telegram) → Slice 6.
 - Frontend: bare SvelteKit routes suffice for now; FSD only when the dashboard
   grows.
