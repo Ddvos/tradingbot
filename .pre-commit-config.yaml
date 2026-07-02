@@ -4,7 +4,7 @@
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -15,20 +15,24 @@ repos:
         args: [--maxkb=1000]
       - id: detect-private-key
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
-    hooks:
-      - id: ruff
-        args: [--fix]
-        files: ^backend/.*\.py$
-      - id: ruff-format
-        files: ^backend/.*\.py$
-
-  # basedpyright runs in the project's own uv env so it can find installed
-  # libraries (polars, pydantic, ...) and their type stubs. A separate
-  # pre-commit env would miss those.
+  # ruff and basedpyright run in the project's own uv env so pre-commit,
+  # `uv run ruff`, and CI all use the exact version pinned in uv.lock — a
+  # separate pre-commit env would drift (and basedpyright would miss the
+  # installed libraries and their type stubs).
   - repo: local
     hooks:
+      - id: ruff-check
+        name: ruff check (lint + autofix)
+        entry: uv run --project backend ruff check --fix --force-exclude
+        language: system
+        types: [python]
+        files: ^backend/.*\.py$
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --project backend ruff format --force-exclude
+        language: system
+        types: [python]
+        files: ^backend/.*\.py$
       - id: basedpyright
         name: basedpyright (strict type check)
         entry: uv run --directory backend basedpyright

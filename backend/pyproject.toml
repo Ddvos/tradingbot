@@ -67,6 +67,7 @@ select = [
     "A",             # flake8-builtins (shadowing builtins)
     "C4",            # comprehensions
     "DTZ",           # datetime tz-aware enforcement (critical for trading)
+    "S",             # bandit (security patterns)
     "T20",           # no print() statements
     "SIM",           # simplify
     "RET",           # return statement hygiene
