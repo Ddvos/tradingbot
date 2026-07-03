@@ -20,8 +20,8 @@
 
 ## Current status — 2026-07-03
 
-**Phase:** Slice 1 done — features, strategy abstraction, and the full-cost
-engine. First hypothesis (1h MA-cross) honestly tested and **rejected**.
+**Phase:** Slice 2 done — the ML pipeline exists end-to-end: triple-barrier
+labels → 13 causal features → XGBoost → saved artifact → MLStrategy.
 
 Done:
 
@@ -42,6 +42,22 @@ Done:
   extended engine: next-open execution, intrabar stop/TP (stop wins ties),
   time exit, flat funding cost, signed (short-capable) positions, trade log.
   52 tests total.
+- ✅ **Slice 2** (3 Jul 2026): triple-barrier labeling (binary: 2.0×ATR target
+  before 1.5×ATR stop within 6 bars), dataset builder with a no-lookahead
+  test, XGBoost training on a purged chronological 70/30 split (fixed
+  hyperparameters — no tuning), IC/AUC evaluation, `.joblib` ModelStore,
+  `MLStrategy` (long when P(target) ≥ 0.6). 71 tests total.
+
+**First model (xgb_v1, dev split — NOT an honest evaluation yet):**
+AUC 0.656, IC 0.208, base rate 0.180 (26,206 train / 11,226 validation rows).
+Treat with suspicion: adjacent labels share 5 of 6 horizon bars, so samples
+are heavily autocorrelated and one split overstates confidence — much of the
+apparent skill may be volatility-regime prediction rather than tradeable
+edge. **No backtest of MLStrategy has been run on purpose**: on dev data it
+would be misleading. Slice 3's walk-forward is the verdict.
+
+**Slice 2 scope notes:** features are 1h-only for now (multi-timeframe 4H/15M
+set deferred); labels are binary long-only; threshold 0.6 fixed a priori.
 
 **The honest numbers** (PF_XBTUSD 1h, 2022-03-23 → 2026-07-02, 37,499 bars,
 pessimistic costs: 0.05% taker, 0.1% slippage, ~11%/yr flat funding):
@@ -75,8 +91,8 @@ for Slice 0–2; tight for the ~2-year walk-forward windows in Slice 3. If more
 history is needed for model development, consider Kraken spot XBT/USD as a
 supplementary training corpus (decide in Slice 3, not now).
 
-**Next step:** Slice 2 — triple-barrier labels + XGBoost, the first ML
-hypothesis (the v1 exit rules were designed for exactly that horizon).
+**Next step:** Slice 3 — honest validation: purged walk-forward, deflated
+Sharpe, bootstrap significance. This is where xgb_v1 earns trust or dies.
 
 ---
 
@@ -187,26 +203,29 @@ buy-and-hold.
 **Done when:** the MA-cross backtest runs with realistic costs; metrics
 reported; tests green. ✅ — result honest and negative, see Findings above.
 
-### Slice 2 — Labels + ML training ⬜
+### Slice 2 — Labels + ML training ✅
 
 **Goal:** triple-barrier labels + XGBoost classifier, trained with strict data
 separation (no leakage). Inference → signals that feed the strategy.
 
 **Deliverables:**
 
-- [ ] `core/models/labeling.py` — triple-barrier (López de Prado): upper
-      2.0×ATR, lower 1.5×ATR, time 6 bars
-- [ ] `core/models/dataset.py` — align X/y without lookahead
-- [ ] `core/models/train.py` — XGBoost training (procedural)
-- [ ] `core/models/inference.py` — load model + predict
-- [ ] `adapters/filesystem/model_store.py` — save/load `.joblib` (concrete,
-      no port yet)
-- [ ] `core/strategies/ml_strategy.py` — strategy that uses model predictions
-- [ ] `scripts/train.py` — CLI
-- [ ] Tests: labeling correctness, no-leakage check
+- [x] `core/models/labeling.py` — triple-barrier (López de Prado): upper
+      2.0×ATR, lower 1.5×ATR, time 6 bars; binary label, stop-wins ties
+- [x] `core/models/dataset.py` — align X/y without lookahead (13 causal 1h
+      features, price-normalized where scale-dependent)
+- [x] `core/models/train.py` — XGBoost training (procedural, fixed params,
+      purged chronological split) + `core/models/evaluation.py` (IC)
+- [x] `core/models/inference.py` — predict from artifact
+- [x] `adapters/filesystem/model_store.py` — save/load `.joblib` (concrete,
+      no port yet); artifact bundles model + feature list + metrics
+- [x] `core/strategies/ml_strategy.py` — strategy that uses model predictions
+- [x] `scripts/train.py` — CLI
+- [x] Tests: labeling correctness, no-leakage check (truncation invariance)
 
 **Done when:** a model trains on dev data, predicts, and the predictions drive a
-strategy; in-sample sanity (IC not NaN).
+strategy; in-sample sanity (IC not NaN). ✅ IC 0.208, finite — see caveats in
+Current status.
 
 ### Slice 3 — Honest validation ⬜
 

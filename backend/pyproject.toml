@@ -10,8 +10,12 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi[standard]>=0.136.3",
     "httpx>=0.28.1",
+    "joblib>=1.5.3",
     "polars>=1.41.0",
     "pydantic>=2.13.4",
+    "scikit-learn>=1.9.0",
+    "scipy>=1.18.0",
+    "xgboost>=3.3.0",
 ]
 
 [project.scripts]
