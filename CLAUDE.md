@@ -466,12 +466,13 @@ class MarketDataProvider(Protocol):                      # Protocol for ports
 *where we are* and *what the next step is*. Update `ROADMAP.md` in the same
 commit as the code.
 
-In short (as of 2 Jul 2026): foundation + **Slice 0 done** — the walking
-skeleton runs end-to-end (Kraken → Parquet → buy-and-hold backtest → Sharpe
-0.42 / max DD −67.2% over 2022–2026 as the baseline to beat). Tooling: ruff +
+In short (as of 3 Jul 2026): **Slices 0 + 1 done** — full pipeline runs on
+real data with pessimistic costs incl. funding. Baseline to beat: buy-and-hold
+Sharpe 0.21 (funding included). First hypothesis (1h MA-cross) honestly
+rejected — cost churn beats the edge; see ROADMAP → Findings. Tooling: ruff +
 basedpyright strict + pytest + pre-commit + CI. Architecture recorded in
-**ADR-001** (_thin_ Hexagonal). **Next step:** Slice 1 — features + rule-based
-MA-cross strategy with realistic costs.
+**ADR-001** (_thin_ Hexagonal). **Next step:** Slice 2 — triple-barrier labels
++ XGBoost.
 
 ## External references
 
