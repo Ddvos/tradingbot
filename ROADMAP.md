@@ -18,9 +18,10 @@
 
 ---
 
-## Current status — 2026-07-02
+## Current status — 2026-07-03
 
-**Phase:** Slice 0 done — the walking skeleton runs end-to-end on real data.
+**Phase:** Slice 1 done — features, strategy abstraction, and the full-cost
+engine. First hypothesis (1h MA-cross) honestly tested and **rejected**.
 
 Done:
 
@@ -36,11 +37,37 @@ Done:
   Kraken charts adapter with pagination, ParquetStore with idempotent upsert,
   SimulatedExecutor (Decimal fees + slippage), buy-and-hold BacktestEngine,
   Sharpe/max-drawdown metrics, backfill + backtest CLIs, 20 tests.
+- ✅ **Slice 1** (3 Jul 2026): indicator library (`core/features/`), `Strategy`
+  Protocol + Hold/MA-cross strategies, `Signal` enum, ATR risk sizing, and the
+  extended engine: next-open execution, intrabar stop/TP (stop wins ties),
+  time exit, flat funding cost, signed (short-capable) positions, trade log.
+  52 tests total.
 
-**The honest number:** PF_XBTUSD 1h buy-and-hold, 2022-03-23 → 2026-07-02
-(37,499 bars, full available history): **Sharpe 0.42, max drawdown −67.2%**,
-€10,000 → €14,482 with pessimistic costs (0.05% taker fee, 0.1% slippage).
-That is the baseline every strategy must beat.
+**The honest numbers** (PF_XBTUSD 1h, 2022-03-23 → 2026-07-02, 37,499 bars,
+pessimistic costs: 0.05% taker, 0.1% slippage, ~11%/yr flat funding):
+
+| Run | Sharpe | Max DD | €10,000 → |
+|---|---|---|---|
+| Buy-and-hold (**the baseline to beat**) | **0.21** | −71% | €7,963 |
+| MA-cross 20/50, v1 risk rules (6-bar time exit) | −10.1 | −100% | €0.11 |
+| MA-cross 20/50, signal-only exits | −0.59 | −70% | €3,330 |
+
+Note the Slice 0 baseline (Sharpe 0.42, €14,482) is superseded: the engine now
+fills at next-bar open and charges funding, both of which buy-and-hold on a
+perp genuinely pays.
+
+**Findings (3 Jul 2026):**
+
+1. **Funding matters enormously**: it turns buy-and-hold from +45% into −20%.
+2. **The v1 exit rules are horizon-bound**: the 6-bar time exit is calibrated
+   for the triple-barrier ML horizon (Slice 2). Applied to a slow trend
+   signal it forces ~4,300 exit/re-enter round trips whose costs compound to
+   −100%. Exit rules must match the signal's holding horizon.
+3. **Hypothesis "1h MA-cross trend persistence" is rejected** — even with
+   matched exits, 447 crossings of cost churn beat the edge (profit factor
+   0.85). Per the development cycle this hypothesis is done; the ML approach
+   (Slice 2) is the next hypothesis, not MA-parameter tweaking (that would be
+   search-until-profitable).
 
 **Data depth finding (2 Jul 2026):** the Kraken Futures charts API serves
 PF_XBTUSD 1h candles from **2022-03-23** only (~4.3 years, no gaps). Enough
@@ -48,8 +75,8 @@ for Slice 0–2; tight for the ~2-year walk-forward windows in Slice 3. If more
 history is needed for model development, consider Kraken spot XBT/USD as a
 supplementary training corpus (decide in Slice 3, not now).
 
-**Next step:** Slice 1 — features + first rule-based strategy (MA-cross) with
-realistic costs.
+**Next step:** Slice 2 — triple-barrier labels + XGBoost, the first ML
+hypothesis (the v1 exit rules were designed for exactly that horizon).
 
 ---
 
@@ -134,7 +161,7 @@ Sharpe + writes an equity curve; types + lint green.
 **Note:** this is also the architecture smoke test. Does the port boundary feel
 heavy? Then we trim before Slice 1.
 
-### Slice 1 — Features + first (rule-based) strategy ⬜
+### Slice 1 — Features + first (rule-based) strategy ✅
 
 **Goal:** OHLCV → features (pure Polars functions); the `Strategy` abstraction;
 a simple rule-based strategy (e.g. MA-cross) runs through the engine with
@@ -143,20 +170,22 @@ buy-and-hold.
 
 **Deliverables:**
 
-- [ ] `core/features/` — pure functions: returns, ATR, RSI, MACD-hist, BB-width,
-      MA-slopes, volume vs MA, OBV, time features (hour/day). Each with a test.
-- [ ] `core/strategies/base.py` — `Strategy` Protocol
-- [ ] `core/strategies/ma_cross.py` — baseline strategy (no ML)
-- [ ] `core/signals/` — predictions/rules → discrete signals (long/flat/short)
-- [ ] `core/risk/sizing.py` — `position_size(balance, atr, risk_pct) -> Decimal`
-- [ ] `core/backtest/engine.py` — extended: entries/exits, stop (1.5×ATR) +
-      TP (3.0×ATR), time exit (6 bars), one position at a time, fees + slippage +
-      funding costs (Slice 1 uses a flat, conservative funding assumption —
-      real funding-rate data arrives in Slice 3)
-- [ ] Tests per feature + engine behavior
+- [x] `core/features/` — pure Polars expressions: returns, ATR, RSI, MACD-hist,
+      BB-width, MA-slopes, volume vs MA, OBV, time features (hour/day). Each
+      with a test. (`indicators.py` + `temporal.py`)
+- [x] `core/strategies/base.py` — `Strategy` Protocol (causal signals contract)
+- [x] `core/strategies/ma_cross.py` — baseline strategy (no ML) + `hold.py`
+- [x] `core/signals/` — `Signal` StrEnum (long/flat/short) + direction mapping
+- [x] `core/risk/sizing.py` — `position_size(...)` (risk-from-stop) +
+      `all_in_size(...)`, notional capped at balance (no leverage)
+- [x] `core/backtest/engine.py` — extended: next-open execution, intrabar stop
+      (1.5×ATR) + TP (3.0×ATR) with stop-wins-ties, time exit (6 bars), one
+      position at a time (long *and* short), fees + slippage + flat funding
+      (real funding-rate data arrives in Slice 3), `TradeRules`, trade log
+- [x] Tests per feature + engine behavior (52 total)
 
 **Done when:** the MA-cross backtest runs with realistic costs; metrics
-reported; tests green.
+reported; tests green. ✅ — result honest and negative, see Findings above.
 
 ### Slice 2 — Labels + ML training ⬜
 
