@@ -7,6 +7,7 @@ Usage:
     uv run python scripts/backtest.py
     uv run python scripts/backtest.py --strategy buy_and_hold
     uv run python scripts/backtest.py --strategy ma_cross --fast 20 --slow 50
+    uv run python scripts/backtest.py --save   # also persist run metadata to Postgres
 """
 
 import argparse
@@ -15,13 +16,17 @@ from decimal import Decimal
 from pathlib import Path
 from typing import cast, get_args
 
+from tradingbot.application.persistence import build_postgres_repositories
 from tradingbot.application.run_backtest import (
     BacktestReport,
     run_buy_and_hold,
     run_ma_cross,
     run_ma_cross_trend,
+    to_run_record,
 )
+from tradingbot.config.settings import Settings
 from tradingbot.core.ports.market_data import Timeframe
+from tradingbot.core.ports.storage import ParamValue
 
 BACKEND_DIR = Path(__file__).parent.parent
 DEFAULT_DATA_DIR = BACKEND_DIR / "data" / "raw" / "ohlcv"
@@ -37,6 +42,7 @@ class _Args(argparse.Namespace):
     capital: Decimal
     data_dir: Path
     out_dir: Path
+    save: bool
 
 
 def print_trade_stats(report: BacktestReport) -> None:
@@ -69,6 +75,11 @@ def main() -> None:
     parser.add_argument("--capital", type=Decimal, default=Decimal(10000))
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="persist run metadata to Postgres (DATABASE_URL) so the dashboard can list it",
+    )
     args = parser.parse_args(namespace=_Args())
 
     timeframe = cast(Timeframe, args.timeframe)  # narrowed by argparse choices
@@ -96,6 +107,15 @@ def main() -> None:
     print(f"  Max drawdown    : {report.max_drawdown:>12.2%}")
     print_trade_stats(report)
     print(f"Equity curve written to {out_path}")
+
+    if args.save:
+        params: dict[str, ParamValue] = (
+            {"fast": args.fast, "slow": args.slow} if args.strategy.startswith("ma_cross") else {}
+        )
+        record = to_run_record(report, args.strategy, args.symbol, timeframe, params, out_path)
+        repositories = build_postgres_repositories(Settings().database_url)
+        repositories.backtest_runs.add(record)
+        print(f"Run saved to database with id {record.id}")
 
 
 if __name__ == "__main__":

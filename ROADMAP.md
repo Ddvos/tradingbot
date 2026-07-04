@@ -18,10 +18,12 @@
 
 ---
 
-## Current status — 2026-07-03
+## Current status — 2026-07-04
 
-**Phase:** Slice 2 done — the ML pipeline exists end-to-end: triple-barrier
-labels → 13 causal features → XGBoost → saved artifact → MLStrategy.
+**Phase:** Slices 0–2 and 4 done. Slice 4 (persistence + API + dashboard) was
+built **before** Slice 3 on request — it is infrastructure and does not
+depend on the validation work. **Slice 3 remains the next modeling step and
+the open gate: xgb_v1 is still unvalidated.**
 
 Done:
 
@@ -47,6 +49,13 @@ Done:
   test, XGBoost training on a purged chronological 70/30 split (fixed
   hyperparameters — no tuning), IC/AUC evaluation, `.joblib` ModelStore,
   `MLStrategy` (long when P(target) ≥ 0.6). 71 tests total.
+- ✅ **Slice 4** (4 Jul 2026, built out of order — see Phase above): storage
+  ports (4 Protocols + frozen-dataclass records), SQLAlchemy 2.0 Postgres
+  adapter + Alembic migration, Pydantic Settings + `.env`, docker-compose
+  Postgres, FastAPI (VSA: backtests/models/strategies/live + /health),
+  `--save`/`--register` script flags, SvelteKit dashboard with
+  lightweight-charts equity curve. 87 tests total. Verified end-to-end:
+  backtest → Postgres → API → chart in the browser.
 
 **First model (xgb_v1, dev split — NOT an honest evaluation yet):**
 AUC 0.656, IC 0.208, base rate 0.180 (26,206 train / 11,226 validation rows).
@@ -93,6 +102,23 @@ supplementary training corpus (decide in Slice 3, not now).
 
 **Next step:** Slice 3 — honest validation: purged walk-forward, deflated
 Sharpe, bootstrap significance. This is where xgb_v1 earns trust or dies.
+(Unchanged by Slice 4 landing first — the dashboard can display walk-forward
+results once they exist, it does not replace them.)
+
+**Running the stack (Slice 4):**
+
+```bash
+docker compose up -d                                  # Postgres 17 (repo root)
+cd backend
+uv run alembic upgrade head                           # create/upgrade schema
+uv run python scripts/backtest.py --strategy buy_and_hold --save
+uv run uvicorn tradingbot.api.app:app --reload        # API on :8000
+cd ../frontend && bun install && bun run dev          # dashboard on :5173
+```
+
+Configuration lives in `backend/.env` (copy from `.env.example`). Kraken API
+keys are **not** needed yet — the public charts API covers backfill; keys
+become relevant in Slice 5+.
 
 ---
 
@@ -247,26 +273,38 @@ holdout untouched.
 **Decision point:** good → toward paper trading. Not good → max 5 iterations,
 otherwise a new hypothesis (see `CLAUDE.md` → Strategy development cycle).
 
-### Slice 4 — Persistence + API + dashboard ⬜
+### Slice 4 — Persistence + API + dashboard ✅
 
 **Goal:** now finally Postgres, the API (VSA), and the SvelteKit dashboard. Here
 the storage port becomes justified (2nd impl: postgres + in-memory fake).
 
 **Deliverables:**
 
-- [ ] `config/settings.py` — Pydantic Settings (env, db-url, kraken keys)
-- [ ] `core/ports/storage.py` — `TradeRepository`, `ModelRegistry`,
-      `BacktestRunRepository` Protocols
-- [ ] `adapters/postgres/` — SQLAlchemy 2.0 repos: trades, runs, positions,
-      configs, model registry
-- [ ] Alembic migrations
-- [ ] `api/features/{strategies,backtests,models,live}/` — routes + schemas +
-      handlers (VSA)
-- [ ] Frontend: list backtests + equity curve (lightweight-charts)
-- [ ] Tests: repo fakes, API happy path
+- [x] `config/settings.py` — Pydantic Settings (env, db-url, kraken keys as
+      `SecretStr`) + `.env.example`/`.env` + docker-compose Postgres
+- [x] `core/ports/storage.py` — `TradeRepository`, `ModelRegistry`,
+      `BacktestRunRepository` **+ `StrategyConfigRepository`** Protocols,
+      records as frozen dataclasses, IDs as `NewType(UUID)`
+- [x] `adapters/postgres/` — SQLAlchemy 2.0 repos: runs, trades, configs,
+      model registry. *Positions deferred to Slice 5*: their consumer is the
+      live runner; designing that table without it would be speculation.
+- [x] Alembic migrations (`backend/migrations/`, URL from Settings; verified
+      against Postgres 17)
+- [x] `api/features/{strategies,backtests,models,live}/` — routes + schemas +
+      handlers (VSA); `live/status` is an explicit stub until Slice 5;
+      equity-curve endpoint joins DB metadata with the Parquet curve file
+- [x] Frontend: list backtests + equity curve (lightweight-charts)
+- [x] Tests: in-memory fakes (the 2nd port impl per ADR-001), repo
+      round-trips on SQLite in-memory, API happy paths (87 tests total)
 
 **Done when:** the dashboard shows a backtest equity curve from the DB; API
-typed; migrations run.
+typed; migrations run. ✅ all three verified 4 Jul 2026.
+
+**Slice 4 scope notes:** backtest scripts persist with `--save` (opt-in — a
+backtest without DB still works); equity curves stay in Parquet, the DB row
+stores the path; `trades` table exists but nothing writes it until the paper
+runner (Slice 5); the models/strategies endpoints return `[]` until
+`train.py --register` runs / configs are saved.
 
 ### Slice 5 — Paper trading ⬜
 
@@ -362,10 +400,19 @@ The canonical (extended) structure + data layout: see `CLAUDE.md`.
   Keep as is.
 - Funding costs: flat conservative assumption in Slice 1; real funding-rate
   data (`data/raw/funding/{symbol}.parquet`) in Slice 3 (2 Jul 2026).
+- **SQLAlchemy 2.0 over SQLModel** (4 Jul 2026): the native typed ORM
+  (`Mapped[]`/`mapped_column`) passes basedpyright strict, and it keeps
+  Pydantic at the system boundaries per the type discipline — SQLModel's
+  Pydantic-SQLAlchemy hybrid classes would blur exactly that line.
+- Slice 4 built before Slice 3 (4 Jul 2026, user decision): pure
+  infrastructure, independent of the validation work. Slice 3 stays the gate
+  for xgb_v1 — nothing in Slice 4 promotes or trades a strategy.
+- API DI via `app.dependency_overrides` on a typed stub (`api/deps.py`)
+  instead of `app.state` — keeps handlers fully typed, tests inject fakes the
+  same way (4 Jul 2026).
 
 **Open (decide later, not now):**
 
-- SQLAlchemy 2.0 vs SQLModel → decide in Slice 4.
 - Supplementary training data (Kraken spot XBT/USD) if 4.3y of PF_XBTUSD is too
   little for walk-forward → decide in Slice 3.
 - Alerting channel (email vs Telegram) → Slice 6.
