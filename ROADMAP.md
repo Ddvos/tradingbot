@@ -18,7 +18,7 @@
 
 ---
 
-## Current status — 2026-07-04
+## Current status — 2026-07-05
 
 **Phase:** Slices 0–4 done. Slice 3 (honest validation) closed the gate it
 guarded, with a split verdict: **the xgb_v1 signal survives out-of-sample;
@@ -75,6 +75,24 @@ Sharpe 0.000, while buy-and-hold did 0.67 on the same windows.
 exactly one thing: a next iteration on the signal→position mapping — the
 loss is in how predictions become trades, not in the model's ranking skill.
 
+**Hypothesis H3 — market-structure features (5 Jul 2026):** first entry in
+the new pre-registration registry **`HYPOTHESES.md`** (hypothesis, fixed
+parameters, and success criteria written down *before* the run). Seven causal
+swing-structure features (fractal k=3 with the k-bar confirmation lag;
+`core/features/structure.py`) were added to the 13-feature set and evaluated
+through the identical walk-forward: pooled OOS IC 0.222 vs 0.218 — inside
+the pre-registered ±0.02 parsimony band → **null result, keep the 13-feature
+set**. The feature library + tests stay (unwired); the trial is registered
+for the deflated Sharpe. 110 tests total.
+
+**Dashboard: walk-forward runs (5 Jul 2026):** new `/walkforward` API slice
+(VSA) reads the run artifacts straight from disk — no DB row, the filesystem
+is the registry — and the dashboard gained a walk-forward section: run list
+(summary metrics recomputed from equity.parquet with the same core
+functions, so they match the report exactly), stitched OOS equity curve,
+per-fold table (NaN/inf → null at the JSON boundary), and the report.md
+verdict. 116 tests total.
+
 **Slice 2 scope notes:** features are 1h-only for now (multi-timeframe 4H/15M
 set deferred); labels are binary long-only; threshold 0.6 fixed a priori.
 
@@ -117,7 +135,9 @@ validation — so the hypothesis is not dead, and the iteration budget
 applies (max 5 per hypothesis; threshold/mapping changes count as
 iterations and must be re-validated through the same walk-forward). Decide:
 iterate on the prediction→position mapping, or fold the hypothesis. Slice 5
-(paper trading) stays gated on a strategy that passes.
+(paper trading) stays gated on a strategy that passes. The feature axis was
+explored on 5 Jul (H3, null result) — the prediction→position mapping
+remains the open axis.
 
 **Running the stack (Slice 4):**
 
@@ -463,6 +483,11 @@ The canonical (extended) structure + data layout: see `CLAUDE.md`.
   diagnostic reruns — the ma-cross-under-v1-rules run (−10.1) is excluded as
   a mechanics mismatch of the same hypothesis (finding #2). Every new
   candidate must be appended there before its results are read.
+- **Hypothesis pre-registration** (5 Jul 2026): every strategy/feature
+  hypothesis gets a `HYPOTHESES.md` entry — motivation, exact spec with
+  a-priori parameters, success criteria — *before* its evaluation runs;
+  verdicts are appended, never edited. First use: H3 (market-structure
+  features) → null result, keep the 13-feature set.
 
 **Open (decide later, not now):**
 

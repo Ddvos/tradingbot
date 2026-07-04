@@ -5,6 +5,8 @@ fallback (copy `.env.example` and fill in). Secrets are `SecretStr` so they
 never leak into logs or reprs.
 """
 
+from pathlib import Path
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -14,6 +16,10 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://tradingbot:tradingbot@localhost:5432/tradingbot"
     """SQLAlchemy URL; the default matches docker-compose.yml."""
+
+    walkforward_dir: Path = Path("data/processed/walkforward")
+    """Where scripts/walkforward.py writes its run artifacts. Relative to the
+    process working directory — backend/, matching how uvicorn is started."""
 
     kraken_api_key: SecretStr = SecretStr("")
     kraken_api_secret: SecretStr = SecretStr("")

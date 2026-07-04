@@ -11,11 +11,12 @@ touches the database.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from tradingbot.api.deps import get_repositories
+from tradingbot.api.deps import get_repositories, get_walkforward_dir
 from tradingbot.api.features.backtests.routes import router as backtests_router
 from tradingbot.api.features.live.routes import router as live_router
 from tradingbot.api.features.models.routes import router as models_router
 from tradingbot.api.features.strategies.routes import router as strategies_router
+from tradingbot.api.features.walkforward.routes import router as walkforward_router
 from tradingbot.application.persistence import Repositories, build_postgres_repositories
 from tradingbot.config.settings import Settings
 
@@ -46,12 +47,14 @@ def create_app(
         allow_headers=["*"],
     )
     app.dependency_overrides[get_repositories] = lambda: repos
+    app.dependency_overrides[get_walkforward_dir] = lambda: resolved.walkforward_dir
 
     app.add_api_route("/health", _health, methods=["GET"], tags=["health"])
     app.include_router(backtests_router)
     app.include_router(models_router)
     app.include_router(strategies_router)
     app.include_router(live_router)
+    app.include_router(walkforward_router)
     return app
 
 

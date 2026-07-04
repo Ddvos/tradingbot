@@ -8,7 +8,9 @@ The no-lookahead guarantee has two halves:
 v1 features are 1h-only (13 of them); the multi-timeframe set (4H trend,
 15M momentum) from CLAUDE.md arrives in a later slice. Scale-dependent
 indicators (ATR, MACD) are normalized by price so the model does not learn
-the era of the price level.
+the era of the price level. The market-structure set (features/structure.py)
+was evaluated under H3 and left out per its parsimony verdict — see
+HYPOTHESES.md before re-adding it.
 """
 
 import polars as pl
