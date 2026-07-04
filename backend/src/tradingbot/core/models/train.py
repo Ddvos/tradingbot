@@ -9,6 +9,8 @@ labels overlap the last training labels.
 
 from datetime import UTC, datetime
 
+import numpy as np
+import numpy.typing as npt
 import polars as pl
 from sklearn.metrics import roc_auc_score
 from xgboost import XGBClassifier
@@ -18,6 +20,30 @@ from tradingbot.core.models.dataset import FEATURE_COLUMNS
 from tradingbot.core.models.evaluation import information_coefficient
 
 MIN_ROWS = 200
+
+
+def fit_classifier(
+    x: npt.NDArray[np.float64],
+    y: npt.NDArray[np.int8],
+    *,
+    n_estimators: int = 300,
+    max_depth: int = 4,
+    learning_rate: float = 0.05,
+) -> XGBClassifier:
+    """Fit the fixed-hyperparameter XGBoost. Single source of the params:
+    the walk-forward (Slice 3) must train exactly the model train_model does."""
+    model = XGBClassifier(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        objective="binary:logistic",
+        eval_metric="logloss",
+        random_state=42,
+    )
+    model.fit(x, y)
+    return model
 
 
 def train_model(
@@ -44,17 +70,13 @@ def train_model(
     x_valid = valid.select(features).to_numpy()
     y_valid = valid.get_column("label").to_numpy()
 
-    model = XGBClassifier(
+    model = fit_classifier(
+        x_train,
+        y_train,
         n_estimators=n_estimators,
         max_depth=max_depth,
         learning_rate=learning_rate,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        objective="binary:logistic",
-        eval_metric="logloss",
-        random_state=42,
     )
-    model.fit(x_train, y_train)
     probabilities = model.predict_proba(x_valid)[:, 1]
 
     metrics = TrainMetrics(

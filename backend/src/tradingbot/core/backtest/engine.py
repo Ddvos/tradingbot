@@ -8,7 +8,8 @@ Execution model, chosen to avoid lookahead and stay pessimistic:
 - A time exit closes the position at the close of its Nth bar.
 - Funding is charged on open notional at every bar close, in both directions
   (pessimistic: never assume funding is collected). Flat placeholder rate
-  until real funding data arrives in Slice 3.
+  until real funding data arrives (deferred to Slice 5 — flat-pessimistic
+  can only understate results, so validation verdicts stay conservative).
 - A position still open at the end of the data stays open, marked to market;
   only closed round-trips appear in `trades`.
 """

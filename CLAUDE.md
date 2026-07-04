@@ -466,16 +466,19 @@ class MarketDataProvider(Protocol):                      # Protocol for ports
 *where we are* and *what the next step is*. Update `ROADMAP.md` in the same
 commit as the code.
 
-In short (as of 4 Jul 2026): **Slices 0–2 and 4 done** — full pipeline runs on
+In short (as of 4 Jul 2026): **Slices 0–4 done** — full pipeline runs on
 real data with pessimistic costs incl. funding; baseline to beat: buy-and-hold
 Sharpe 0.21. MA-cross hypothesis rejected (cost churn). ML pipeline exists:
-triple-barrier labels → XGBoost (xgb_v1: dev AUC 0.66, IC 0.21 — unvalidated,
-treat with suspicion) → MLStrategy. Slice 4 (built out of order, before 3):
-Postgres via SQLAlchemy 2.0 + Alembic, storage ports, FastAPI (VSA), SvelteKit
-dashboard with equity curves. Tooling: ruff + basedpyright strict + pytest +
-pre-commit + CI. Architecture in **ADR-001** (_thin_ Hexagonal).
-**Next step:** Slice 3 — purged walk-forward, deflated Sharpe; xgb_v1 earns
-trust or dies there.
+triple-barrier labels → XGBoost (xgb_v1) → MLStrategy. Slice 4: Postgres via
+SQLAlchemy 2.0 + Alembic, storage ports, FastAPI (VSA), SvelteKit dashboard
+with equity curves. Slice 3 (honest validation): purged walk-forward,
+deflated Sharpe, bootstrap CI, holdout protocol (`HOLDOUT.md`, boundary
+2025-07-01). Verdict: xgb_v1's *signal* survives OOS (IC 0.22 across all
+folds) but MLStrategy(threshold 0.6) is **rejected** (4 trades/15 months,
+OOS Sharpe −1.66 vs buy-and-hold 0.67). Tooling: ruff + basedpyright strict +
+pytest + pre-commit + CI. Architecture in **ADR-001** (_thin_ Hexagonal).
+**Next step:** the Slice 3 decision point — iterate on the signal→position
+mapping (max 5 iterations) or fold the hypothesis.
 
 ## External references
 
