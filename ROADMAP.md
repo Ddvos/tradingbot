@@ -20,10 +20,10 @@
 
 ## Current status — 2026-07-04
 
-**Phase:** Slices 0–2 and 4 done. Slice 4 (persistence + API + dashboard) was
-built **before** Slice 3 on request — it is infrastructure and does not
-depend on the validation work. **Slice 3 remains the next modeling step and
-the open gate: xgb_v1 is still unvalidated.**
+**Phase:** Slices 0–4 done. Slice 3 (honest validation) closed the gate it
+guarded, with a split verdict: **the xgb_v1 signal survives out-of-sample;
+the strategy built on it does not** — see the walk-forward verdict below.
+Next is the decision point at the end of Slice 3.
 
 Done:
 
@@ -56,14 +56,24 @@ Done:
   `--save`/`--register` script flags, SvelteKit dashboard with
   lightweight-charts equity curve. 87 tests total. Verified end-to-end:
   backtest → Postgres → API → chart in the browser.
+- ✅ **Slice 3** (4 Jul 2026): purged + embargoed rolling walk-forward
+  (2y train / 90d test / purge 6 = label horizon / embargo 24, retrain per
+  fold), evaluation suite (probabilistic + deflated Sharpe, block-bootstrap
+  Sharpe CI, win rate, profit factor), stitched OOS equity + report artifact
+  (folds.parquet + equity.parquet + report.md per run), holdout protocol in
+  `HOLDOUT.md` (boundary 2025-07-01, enforced in code). 102 tests total.
 
-**First model (xgb_v1, dev split — NOT an honest evaluation yet):**
-AUC 0.656, IC 0.208, base rate 0.180 (26,206 train / 11,226 validation rows).
-Treat with suspicion: adjacent labels share 5 of 6 horizon bars, so samples
-are heavily autocorrelated and one split overstates confidence — much of the
-apparent skill may be volatility-regime prediction rather than tradeable
-edge. **No backtest of MLStrategy has been run on purpose**: on dev data it
-would be misleading. Slice 3's walk-forward is the verdict.
+**Walk-forward verdict on xgb_v1 (4 Jul 2026 — the honest evaluation):**
+5 folds, OOS test windows 2024-03-25 → 2025-06-18 (~15 months). The
+*signal* is real: pooled OOS IC 0.218 / AUC 0.664, stable across every fold
+(IC 0.19–0.24) — the Slice-2 dev numbers were not a split artifact. The
+*strategy* is not: P(target) ≥ 0.6 fired only 4 trades in 15 months (with
+base rate 0.18 the model rarely gets that confident), 1 win, profit factor
+0.05. OOS Sharpe **−1.66** (bootstrap 95% CI [−2.81, 0.45]), deflated
+Sharpe 0.000, while buy-and-hold did 0.67 on the same windows.
+**MLStrategy(xgb_v1, threshold 0.6) is rejected.** The stable IC earns
+exactly one thing: a next iteration on the signal→position mapping — the
+loss is in how predictions become trades, not in the model's ranking skill.
 
 **Slice 2 scope notes:** features are 1h-only for now (multi-timeframe 4H/15M
 set deferred); labels are binary long-only; threshold 0.6 fixed a priori.
@@ -98,12 +108,16 @@ perp genuinely pays.
 PF_XBTUSD 1h candles from **2022-03-23** only (~4.3 years, no gaps). Enough
 for Slice 0–2; tight for the ~2-year walk-forward windows in Slice 3. If more
 history is needed for model development, consider Kraken spot XBT/USD as a
-supplementary training corpus (decide in Slice 3, not now).
+supplementary training corpus — resolved 4 Jul 2026: not needed (see
+decision log).
 
-**Next step:** Slice 3 — honest validation: purged walk-forward, deflated
-Sharpe, bootstrap significance. This is where xgb_v1 earns trust or dies.
-(Unchanged by Slice 4 landing first — the dashboard can display walk-forward
-results once they exist, it does not replace them.)
+**Next step:** the Slice 3 decision point. MLStrategy(xgb_v1, 0.6) is
+rejected, but the OOS IC says the underlying signal survives honest
+validation — so the hypothesis is not dead, and the iteration budget
+applies (max 5 per hypothesis; threshold/mapping changes count as
+iterations and must be re-validated through the same walk-forward). Decide:
+iterate on the prediction→position mapping, or fold the hypothesis. Slice 5
+(paper trading) stays gated on a strategy that passes.
 
 **Running the stack (Slice 4):**
 
@@ -112,6 +126,7 @@ docker compose up -d                                  # Postgres 17 (repo root)
 cd backend
 uv run alembic upgrade head                           # create/upgrade schema
 uv run python scripts/backtest.py --strategy buy_and_hold --save
+uv run python scripts/walkforward.py                  # honest eval (Slice 3), dev data only
 uv run uvicorn tradingbot.api.app:app --reload        # API on :8000
 cd ../frontend && bun install && bun run dev          # dashboard on :5173
 ```
@@ -223,7 +238,7 @@ buy-and-hold.
 - [x] `core/backtest/engine.py` — extended: next-open execution, intrabar stop
       (1.5×ATR) + TP (3.0×ATR) with stop-wins-ties, time exit (6 bars), one
       position at a time (long *and* short), fees + slippage + flat funding
-      (real funding-rate data arrives in Slice 3), `TradeRules`, trade log
+      (real funding-rate data deferred to Slice 5), `TradeRules`, trade log
 - [x] Tests per feature + engine behavior (52 total)
 
 **Done when:** the MA-cross backtest runs with realistic costs; metrics
@@ -253,25 +268,47 @@ separation (no leakage). Inference → signals that feed the strategy.
 strategy; in-sample sanity (IC not NaN). ✅ IC 0.208, finite — see caveats in
 Current status.
 
-### Slice 3 — Honest validation ⬜
+### Slice 3 — Honest validation ✅
 
 **Goal:** the rigor this project exists for. Purged walk-forward + embargo,
 deflated Sharpe, IC, bootstrap significance, holdout discipline.
 
 **Deliverables:**
 
-- [ ] `core/models/walk_forward.py` — purged, embargoed rolling splits (~2 years)
-- [ ] `core/models/evaluation.py` — Sharpe, **deflated** Sharpe, IC, max DD,
-      win rate, profit factor, bootstrap CI
-- [ ] `application/run_walkforward.py` — full eval run
-- [ ] Report artifact per run (Parquet + short markdown)
-- [ ] Documented holdout protocol (one-time use, then never again)
+- [x] `core/models/walk_forward.py` — purged, embargoed rolling splits
+      (2y train / 90d test; purge 6 = label horizon; embargo 24; truncated
+      tail folds kept only above a 30-day minimum)
+- [x] `core/models/evaluation.py` — **deflated** Sharpe + probabilistic
+      Sharpe (Bailey & López de Prado 2014), moving-block bootstrap Sharpe
+      CI, win rate, profit factor. Plain Sharpe/max-DD stay in
+      `core/backtest/metrics.py` (reused, not duplicated); IC was already here.
+- [x] `application/run_walkforward.py` — full eval run: fresh XGBoost per
+      fold (same fixed hyperparameters as `train.py`, via the shared
+      `fit_classifier`), OOS predictions backtested through the real engine
+      with pessimistic costs (TP aligned to the 2.0×ATR label barrier),
+      per-fold curves stitched into one OOS equity curve. Clamps to
+      pre-holdout data unconditionally. Buy-and-hold is run over the same
+      test windows as the baseline.
+- [x] Report artifact per run: `scripts/walkforward.py` writes
+      `folds.parquet` + `equity.parquet` + `report.md` under
+      `data/processed/walkforward/{symbol}/`.
+- [x] Documented holdout protocol → **`HOLDOUT.md`** (repo root): boundary
+      2025-07-01, one-shot-per-strategy rules, usage log, enforcement notes.
 
 **Done when:** a full walk-forward eval produces an honest metrics report;
-holdout untouched.
+holdout untouched. ✅ report produced 4 Jul 2026; holdout untouched.
 
-**Decision point:** good → toward paper trading. Not good → max 5 iterations,
-otherwise a new hypothesis (see `CLAUDE.md` → Strategy development cycle).
+**Result (4 Jul 2026):** split verdict — signal survives, strategy dies.
+Pooled OOS IC 0.218 / AUC 0.664, stable across all 5 folds; but only 4
+trades in 15 OOS months (threshold 0.6 vs base rate 0.18), profit factor
+0.05, OOS Sharpe −1.66 (95% CI [−2.81, 0.45]), deflated Sharpe 0.000 vs
+buy-and-hold 0.67 on the same windows. Full numbers in the Current-status
+verdict above and in the report artifact.
+
+**Decision point:** not good → max 5 iterations on this hypothesis or a new
+one (see `CLAUDE.md` → Strategy development cycle). The stable OOS IC makes
+the signal→position mapping the obvious iteration target; any change counts
+against the budget and re-runs the same walk-forward.
 
 ### Slice 4 — Persistence + API + dashboard ✅
 
@@ -400,6 +437,10 @@ The canonical (extended) structure + data layout: see `CLAUDE.md`.
   Keep as is.
 - Funding costs: flat conservative assumption in Slice 1; real funding-rate
   data (`data/raw/funding/{symbol}.parquet`) in Slice 3 (2 Jul 2026).
+  **Amended 4 Jul 2026: moved to Slice 5.** The flat assumption charges
+  funding pessimistically in both directions, so it can only understate
+  backtest results — the walk-forward verdict stays conservative without
+  real funding data, and the live loop needs that data anyway.
 - **SQLAlchemy 2.0 over SQLModel** (4 Jul 2026): the native typed ORM
   (`Mapped[]`/`mapped_column`) passes basedpyright strict, and it keeps
   Pydantic at the system boundaries per the type discipline — SQLModel's
@@ -410,11 +451,21 @@ The canonical (extended) structure + data layout: see `CLAUDE.md`.
 - API DI via `app.dependency_overrides` on a typed stub (`api/deps.py`)
   instead of `app.state` — keeps handlers fully typed, tests inject fakes the
   same way (4 Jul 2026).
+- **Holdout boundary: 2025-07-01** (4 Jul 2026) — everything from that
+  timestamp on is holdout (~12 months, growing as new bars arrive); protocol
+  and usage log in `HOLDOUT.md`, clamp enforced in `run_walkforward.py`.
+- Supplementary spot training data: **not needed** (4 Jul 2026) — the 3.3y
+  development window hosts 5 walk-forward folds / 15 OOS months, enough for
+  a verdict; staying futures-only keeps microstructure and costs consistent
+  with the traded instrument.
+- Deflated-Sharpe trial registry (4 Jul 2026): `TRIAL_SHARPES_ANNUALIZED` in
+  `application/run_walkforward.py` counts strategy *candidates*, not
+  diagnostic reruns — the ma-cross-under-v1-rules run (−10.1) is excluded as
+  a mechanics mismatch of the same hypothesis (finding #2). Every new
+  candidate must be appended there before its results are read.
 
 **Open (decide later, not now):**
 
-- Supplementary training data (Kraken spot XBT/USD) if 4.3y of PF_XBTUSD is too
-  little for walk-forward → decide in Slice 3.
 - Alerting channel (email vs Telegram) → Slice 6.
 - Frontend: bare SvelteKit routes suffice for now; FSD only when the dashboard
   grows.
