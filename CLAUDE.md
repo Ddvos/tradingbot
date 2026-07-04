@@ -102,7 +102,7 @@ Backtest and live run the same strategy code, only different adapters.
 - **DuckDB** for ad-hoc SQL queries on Parquet
 - **XGBoost** + scikit-learn for ML
 - **APScheduler** for live job scheduling
-- **SQLAlchemy 2.0** or **SQLModel** for ORM (to be decided)
+- **SQLAlchemy 2.0** for the ORM (decided in Slice 4 — see `ROADMAP.md` decision log)
 - **Alembic** for database migrations
 - **pytest** for tests
 - **ruff** for linting and formatting
@@ -466,12 +466,14 @@ class MarketDataProvider(Protocol):                      # Protocol for ports
 *where we are* and *what the next step is*. Update `ROADMAP.md` in the same
 commit as the code.
 
-In short (as of 3 Jul 2026): **Slices 0–2 done** — full pipeline runs on real
-data with pessimistic costs incl. funding; baseline to beat: buy-and-hold
+In short (as of 4 Jul 2026): **Slices 0–2 and 4 done** — full pipeline runs on
+real data with pessimistic costs incl. funding; baseline to beat: buy-and-hold
 Sharpe 0.21. MA-cross hypothesis rejected (cost churn). ML pipeline exists:
 triple-barrier labels → XGBoost (xgb_v1: dev AUC 0.66, IC 0.21 — unvalidated,
-treat with suspicion) → MLStrategy. Tooling: ruff + basedpyright strict +
-pytest + pre-commit + CI. Architecture in **ADR-001** (_thin_ Hexagonal).
+treat with suspicion) → MLStrategy. Slice 4 (built out of order, before 3):
+Postgres via SQLAlchemy 2.0 + Alembic, storage ports, FastAPI (VSA), SvelteKit
+dashboard with equity curves. Tooling: ruff + basedpyright strict + pytest +
+pre-commit + CI. Architecture in **ADR-001** (_thin_ Hexagonal).
 **Next step:** Slice 3 — purged walk-forward, deflated Sharpe; xgb_v1 earns
 trust or dies there.
 

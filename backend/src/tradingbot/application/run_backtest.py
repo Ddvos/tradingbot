@@ -6,14 +6,17 @@ Trading constraints).
 """
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 from tradingbot.adapters.parquet.store import ParquetStore
 from tradingbot.adapters.simulated.executor import SimulatedExecutor
 from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, TradeRules
 from tradingbot.core.backtest.metrics import PERIODS_PER_YEAR_1H, max_drawdown, sharpe_ratio
 from tradingbot.core.ports.market_data import Timeframe
+from tradingbot.core.ports.storage import BacktestRunId, BacktestRunRecord, ParamValue
 from tradingbot.core.strategies.base import Strategy
 from tradingbot.core.strategies.hold import HoldStrategy
 from tradingbot.core.strategies.ma_cross import MACrossStrategy
@@ -57,6 +60,40 @@ def run_strategy(
         sharpe=sharpe_ratio(equity, PERIODS_PER_YEAR_1H),
         max_drawdown=max_drawdown(equity),
         num_bars=len(ohlcv),
+    )
+
+
+def to_run_record(
+    report: BacktestReport,
+    strategy: str,
+    symbol: str,
+    timeframe: Timeframe,
+    params: dict[str, ParamValue],
+    equity_curve_path: Path,
+) -> BacktestRunRecord:
+    """Turn a finished report into the persistable metadata record.
+
+    The equity curve itself stays in Parquet (CLAUDE.md → Storage); the
+    record only points at it.
+    """
+    timestamps = report.result.equity_curve.get_column("timestamp")
+    data_start: datetime = timestamps[0]
+    data_end: datetime = timestamps[-1]
+    return BacktestRunRecord(
+        id=BacktestRunId(uuid4()),
+        strategy=strategy,
+        symbol=symbol,
+        timeframe=timeframe,
+        data_start=data_start,
+        data_end=data_end,
+        initial_capital=report.result.initial_capital,
+        final_equity=report.result.final_equity,
+        sharpe=report.sharpe,
+        max_drawdown=report.max_drawdown,
+        n_trades=len(report.result.trades),
+        params=params,
+        equity_curve_path=str(equity_curve_path),
+        created_at=datetime.now(UTC),
     )
 
 
