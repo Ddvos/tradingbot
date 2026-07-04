@@ -5,8 +5,14 @@ inject fakes the same way — so this module never imports adapters and the
 stub bodies are never executed.
 """
 
+from pathlib import Path
+
 from tradingbot.application.persistence import Repositories
 
 
 def get_repositories() -> Repositories:
+    raise RuntimeError("Dependency not wired — create_app installs the override")
+
+
+def get_walkforward_dir() -> Path:
     raise RuntimeError("Dependency not wired — create_app installs the override")

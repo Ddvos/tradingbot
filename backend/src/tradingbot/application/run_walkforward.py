@@ -49,6 +49,8 @@ on is never touched by development — walk-forward runs clamp to before it."""
 TRIAL_SHARPES_ANNUALIZED: dict[str, float] = {
     "buy_and_hold": 0.21,
     "ma_cross_20_50_trend_exits": -0.59,
+    "ml_xgb_v1_threshold_0.6": -1.66,
+    "ml_xgb_v2_structure_features_threshold_0.6": -2.12,
 }
 """Every strategy candidate evaluated against the development data so far,
 with its annualized Sharpe (ROADMAP.md → The honest numbers). This is the
