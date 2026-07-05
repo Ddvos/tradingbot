@@ -111,7 +111,7 @@ def test_strategies_list(client: TestClient, repos: Repositories) -> None:
     assert listed[0]["params"] == {"fast": 20, "slow": 50}
 
 
-def test_live_status_stub(client: TestClient) -> None:
+def test_live_status_idle_before_any_state_exists(client: TestClient) -> None:
     response = client.get("/live/status")
     assert response.status_code == 200
-    assert response.json()["state"] == "offline"
+    assert response.json()["state"] == "idle"

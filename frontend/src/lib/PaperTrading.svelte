@@ -62,7 +62,9 @@
 	}
 
 	const money = (x: string | number | null): string =>
-		x === null || x === '' ? 'n/a' : Number(x).toLocaleString('en-US', { maximumFractionDigits: 2 });
+		x === null || x === ''
+			? 'n/a'
+			: Number(x).toLocaleString('en-US', { maximumFractionDigits: 2 });
 	const qty = (x: string | number): string =>
 		Number(x).toLocaleString('en-US', { maximumFractionDigits: 6 });
 	const dateTime = (iso: string | null): string =>
@@ -116,7 +118,8 @@
 					{status.state}
 				</span>
 				<span class="text-sm text-gray-600">
-					Strategy: <span class="font-medium text-gray-900">{status.promoted_strategy ?? 'none'}</span
+					Strategy: <span class="font-medium text-gray-900"
+						>{status.promoted_strategy ?? 'none'}</span
 					>
 				</span>
 				<span class="text-sm text-gray-500">Last tick: {dateTime(status.last_tick_at)}</span>
@@ -125,15 +128,15 @@
 			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
 				<div>
 					<div class="text-xs tracking-wide text-gray-500 uppercase">Initial capital</div>
-					<div class="tabular-nums text-gray-900">{money(status.initial_capital)}</div>
+					<div class="text-gray-900 tabular-nums">{money(status.initial_capital)}</div>
 				</div>
 				<div>
 					<div class="text-xs tracking-wide text-gray-500 uppercase">Cash</div>
-					<div class="tabular-nums text-gray-900">{money(status.cash)}</div>
+					<div class="text-gray-900 tabular-nums">{money(status.cash)}</div>
 				</div>
 				<div>
 					<div class="text-xs tracking-wide text-gray-500 uppercase">Equity</div>
-					<div class="tabular-nums text-gray-900">{money(status.equity)}</div>
+					<div class="text-gray-900 tabular-nums">{money(status.equity)}</div>
 				</div>
 			</div>
 
@@ -150,23 +153,23 @@
 						</div>
 						<div>
 							<div class="text-xs text-gray-500">Quantity</div>
-							<div class="tabular-nums text-gray-900">{qty(p.quantity)}</div>
+							<div class="text-gray-900 tabular-nums">{qty(p.quantity)}</div>
 						</div>
 						<div>
 							<div class="text-xs text-gray-500">Entry</div>
-							<div class="tabular-nums text-gray-900">{money(p.entry_price)}</div>
+							<div class="text-gray-900 tabular-nums">{money(p.entry_price)}</div>
 						</div>
 						<div>
 							<div class="text-xs text-gray-500">Stop</div>
-							<div class="tabular-nums text-gray-900">{money(p.stop)}</div>
+							<div class="text-gray-900 tabular-nums">{money(p.stop)}</div>
 						</div>
 						<div>
 							<div class="text-xs text-gray-500">Take profit</div>
-							<div class="tabular-nums text-gray-900">{money(p.take_profit)}</div>
+							<div class="text-gray-900 tabular-nums">{money(p.take_profit)}</div>
 						</div>
 						<div>
 							<div class="text-xs text-gray-500">Bars held</div>
-							<div class="tabular-nums text-gray-900">{p.bars_held}</div>
+							<div class="text-gray-900 tabular-nums">{p.bars_held}</div>
 						</div>
 					</div>
 				</div>
@@ -230,7 +233,9 @@
 
 	<h3 class="text-base font-medium text-gray-900">Paper trades</h3>
 	{#if trades.length === 0 && loaded}
-		<p class="text-sm text-gray-500">No paper trades yet — they appear once the runner closes a position.</p>
+		<p class="text-sm text-gray-500">
+			No paper trades yet — they appear once the runner closes a position.
+		</p>
 	{:else if trades.length > 0}
 		<div class="overflow-x-auto rounded-lg border border-gray-200">
 			<table class="min-w-full divide-y divide-gray-200 text-sm">
@@ -248,11 +253,15 @@
 					{#each trades as trade (trade.id)}
 						<tr>
 							<td class="px-4 py-2 text-gray-600">{dateTime(trade.exit_time)}</td>
-							<td class="px-4 py-2 font-medium {trade.side === 'buy' ? 'text-green-700' : 'text-red-700'}">
+							<td
+								class="px-4 py-2 font-medium {trade.side === 'buy'
+									? 'text-green-700'
+									: 'text-red-700'}"
+							>
 								{sideLabel(trade.side)}
 							</td>
 							<td class="px-4 py-2 text-right tabular-nums">{qty(trade.quantity)}</td>
-							<td class="px-4 py-2 text-right tabular-nums text-gray-600">
+							<td class="px-4 py-2 text-right text-gray-600 tabular-nums">
 								{money(trade.entry_price)} → {money(trade.exit_price)}
 							</td>
 							<td class="px-4 py-2 text-right font-medium tabular-nums {pnlClass(trade.pnl)}">
