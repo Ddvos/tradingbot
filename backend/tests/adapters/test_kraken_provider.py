@@ -65,3 +65,18 @@ def test_second_page_starts_after_last_candle() -> None:
 
     second_from = int(requests_seen[1].url.params["from"])
     assert second_from == (T0 + HOUR_MS) // 1000 + 3600
+
+
+def test_still_forming_candle_is_dropped() -> None:
+    """The charts API returns the in-progress bar; only closed bars may pass."""
+    requests_seen: list[httpx.Request] = []
+    since = datetime(2024, 1, 1, tzinfo=UTC)
+    # halfway through the third bar: it opened at T0+2h and closes at T0+3h
+    mid_third_bar = datetime(2024, 1, 1, 2, 30, tzinfo=UTC)
+
+    client = httpx.Client(transport=paginating_handler(requests_seen), base_url=BASE_URL)
+    provider = KrakenProvider(client=client, now=lambda: mid_third_bar)
+    df = provider.fetch_ohlcv("PF_XBTUSD", "1h", since)
+
+    assert df.get_column("close").to_list() == [100.0, 101.0]
+    validate_ohlcv(df)
