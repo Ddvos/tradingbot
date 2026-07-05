@@ -74,3 +74,47 @@ class StrategyConfigRow(Base):
     name: Mapped[str] = mapped_column(sa.String(128), unique=True)
     params: Mapped[dict[str, ParamValue]] = mapped_column(sa.JSON)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+
+
+class PositionRow(Base):
+    __tablename__ = "positions"
+
+    id: Mapped[UUID] = mapped_column(sa.Uuid, primary_key=True)
+    strategy: Mapped[str] = mapped_column(sa.String(64))
+    symbol: Mapped[str] = mapped_column(sa.String(32), unique=True)  # one open position per symbol
+    side: Mapped[str] = mapped_column(sa.String(4))
+    quantity: Mapped[Decimal] = mapped_column(sa.Numeric(24, 8))
+    entry_price: Mapped[Decimal] = mapped_column(sa.Numeric(24, 8))
+    entry_fee: Mapped[Decimal] = mapped_column(sa.Numeric(24, 8))
+    entry_time: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    stop: Mapped[Decimal | None] = mapped_column(sa.Numeric(24, 8), nullable=True)
+    take_profit: Mapped[Decimal | None] = mapped_column(sa.Numeric(24, 8), nullable=True)
+    bars_held: Mapped[int]
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+
+
+SINGLETON_ROW_ID = 1
+"""bot_commands and paper_account each hold exactly one row, keyed by this."""
+
+
+class BotCommandsRow(Base):
+    __tablename__ = "bot_commands"
+
+    id: Mapped[int] = mapped_column(sa.SmallInteger, primary_key=True)
+    is_paused: Mapped[bool]
+    promoted_strategy: Mapped[str | None] = mapped_column(sa.String(128), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+
+
+class PaperAccountRow(Base):
+    __tablename__ = "paper_account"
+
+    id: Mapped[int] = mapped_column(sa.SmallInteger, primary_key=True)
+    cash: Mapped[Decimal] = mapped_column(sa.Numeric(24, 8))
+    equity: Mapped[Decimal] = mapped_column(sa.Numeric(24, 8))
+    initial_capital: Mapped[Decimal] = mapped_column(sa.Numeric(24, 8))
+    last_tick_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    last_bar_time: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))

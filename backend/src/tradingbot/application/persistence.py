@@ -10,13 +10,19 @@ from dataclasses import dataclass
 from tradingbot.adapters.postgres.engine import create_db_engine, create_session_factory
 from tradingbot.adapters.postgres.repositories import (
     PostgresBacktestRunRepository,
+    PostgresBotCommandRepository,
     PostgresModelRegistry,
+    PostgresPaperAccountRepository,
+    PostgresPositionRepository,
     PostgresStrategyConfigRepository,
     PostgresTradeRepository,
 )
 from tradingbot.core.ports.storage import (
     BacktestRunRepository,
+    BotCommandRepository,
     ModelRegistry,
+    PaperAccountRepository,
+    PositionRepository,
     StrategyConfigRepository,
     TradeRepository,
 )
@@ -28,6 +34,9 @@ class Repositories:
     trades: TradeRepository
     models: ModelRegistry
     strategy_configs: StrategyConfigRepository
+    positions: PositionRepository
+    bot_commands: BotCommandRepository
+    paper_account: PaperAccountRepository
 
 
 def build_postgres_repositories(database_url: str) -> Repositories:
@@ -37,4 +46,7 @@ def build_postgres_repositories(database_url: str) -> Repositories:
         trades=PostgresTradeRepository(session_factory),
         models=PostgresModelRegistry(session_factory),
         strategy_configs=PostgresStrategyConfigRepository(session_factory),
+        positions=PostgresPositionRepository(session_factory),
+        bot_commands=PostgresBotCommandRepository(session_factory),
+        paper_account=PostgresPaperAccountRepository(session_factory),
     )

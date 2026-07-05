@@ -8,15 +8,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from tests.fakes import (
-    InMemoryBacktestRunRepository,
-    InMemoryModelRegistry,
-    InMemoryStrategyConfigRepository,
-    InMemoryTradeRepository,
-)
+from tests.fakes import make_fake_repositories
 from tradingbot.api.app import create_app
 from tradingbot.api.features.walkforward import handlers
-from tradingbot.application.persistence import Repositories
 from tradingbot.config.settings import Settings
 
 _T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -59,14 +53,8 @@ def write_run(base: Path, symbol: str, run: str, *, equity: list[float]) -> None
 
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
-    repos = Repositories(
-        backtest_runs=InMemoryBacktestRunRepository(),
-        trades=InMemoryTradeRepository(),
-        models=InMemoryModelRegistry(),
-        strategy_configs=InMemoryStrategyConfigRepository(),
-    )
     settings = Settings(walkforward_dir=tmp_path)
-    return TestClient(create_app(repositories=repos, settings=settings))
+    return TestClient(create_app(repositories=make_fake_repositories(), settings=settings))
 
 
 def test_list_runs_empty_when_dir_missing(client: TestClient) -> None:

@@ -15,8 +15,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tradingbot.adapters.postgres.tables import (
+    SINGLETON_ROW_ID,
     BacktestRunRow,
+    BotCommandsRow,
     ModelRow,
+    PaperAccountRow,
+    PositionRow,
     StrategyConfigRow,
     TradeRow,
 )
@@ -24,8 +28,12 @@ from tradingbot.core.ports.executor import Side
 from tradingbot.core.ports.storage import (
     BacktestRunId,
     BacktestRunRecord,
+    BotCommandsRecord,
     ModelId,
     ModelRecord,
+    PaperAccountRecord,
+    PositionId,
+    PositionRecord,
     StrategyConfigId,
     StrategyConfigRecord,
     TradeId,
@@ -194,6 +202,143 @@ class PostgresModelRegistry:
         statement = select(ModelRow).order_by(ModelRow.created_at.desc())
         with self._session_factory() as session:
             return [_model_record(row) for row in session.scalars(statement)]
+
+
+def _position_record(row: PositionRow) -> PositionRecord:
+    return PositionRecord(
+        id=PositionId(row.id),
+        strategy=row.strategy,
+        symbol=row.symbol,
+        side=Side(row.side),
+        quantity=row.quantity,
+        entry_price=row.entry_price,
+        entry_fee=row.entry_fee,
+        entry_time=_as_utc(row.entry_time),
+        stop=row.stop,
+        take_profit=row.take_profit,
+        bars_held=row.bars_held,
+        updated_at=_as_utc(row.updated_at),
+    )
+
+
+class PostgresPositionRepository:
+    """Implements the PositionRepository port."""
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self._session_factory = session_factory
+
+    def get_open(self, symbol: str) -> PositionRecord | None:
+        statement = select(PositionRow).where(PositionRow.symbol == symbol)
+        with self._session_factory() as session:
+            row = session.scalar(statement)
+            return _position_record(row) if row is not None else None
+
+    def save(self, position: PositionRecord) -> None:
+        row = PositionRow(
+            id=position.id,
+            strategy=position.strategy,
+            symbol=position.symbol,
+            side=position.side.value,
+            quantity=position.quantity,
+            entry_price=position.entry_price,
+            entry_fee=position.entry_fee,
+            entry_time=position.entry_time,
+            stop=position.stop,
+            take_profit=position.take_profit,
+            bars_held=position.bars_held,
+            updated_at=position.updated_at,
+        )
+        with self._session_factory() as session, session.begin():
+            session.merge(row)
+
+    def delete(self, position_id: PositionId) -> None:
+        with self._session_factory() as session, session.begin():
+            row = session.get(PositionRow, position_id)
+            if row is not None:
+                session.delete(row)
+
+
+class PostgresBotCommandRepository:
+    """Implements the BotCommandRepository port.
+
+    Targeted single-column updates: the API process writes flags while the
+    bot process reads them — never rewriting the whole row avoids one write
+    clobbering the other.
+    """
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self._session_factory = session_factory
+
+    def get(self) -> BotCommandsRecord | None:
+        with self._session_factory() as session:
+            row = session.get(BotCommandsRow, SINGLETON_ROW_ID)
+            if row is None:
+                return None
+            return BotCommandsRecord(
+                is_paused=row.is_paused,
+                promoted_strategy=row.promoted_strategy,
+                updated_at=_as_utc(row.updated_at),
+            )
+
+    def set_paused(self, paused: bool) -> None:
+        with self._session_factory() as session, session.begin():
+            row = self._row(session)
+            row.is_paused = paused
+            row.updated_at = datetime.now(UTC)
+
+    def set_promoted(self, strategy: str | None) -> None:
+        with self._session_factory() as session, session.begin():
+            row = self._row(session)
+            row.promoted_strategy = strategy
+            row.updated_at = datetime.now(UTC)
+
+    def _row(self, session: Session) -> BotCommandsRow:
+        row = session.get(BotCommandsRow, SINGLETON_ROW_ID)
+        if row is None:
+            row = BotCommandsRow(
+                id=SINGLETON_ROW_ID,
+                is_paused=False,
+                promoted_strategy=None,
+                updated_at=datetime.now(UTC),
+            )
+            session.add(row)
+        return row
+
+
+class PostgresPaperAccountRepository:
+    """Implements the PaperAccountRepository port."""
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self._session_factory = session_factory
+
+    def get(self) -> PaperAccountRecord | None:
+        with self._session_factory() as session:
+            row = session.get(PaperAccountRow, SINGLETON_ROW_ID)
+            if row is None:
+                return None
+            return PaperAccountRecord(
+                cash=row.cash,
+                equity=row.equity,
+                initial_capital=row.initial_capital,
+                last_tick_at=_as_utc(row.last_tick_at) if row.last_tick_at is not None else None,
+                last_bar_time=(
+                    _as_utc(row.last_bar_time) if row.last_bar_time is not None else None
+                ),
+                updated_at=_as_utc(row.updated_at),
+            )
+
+    def save(self, account: PaperAccountRecord) -> None:
+        row = PaperAccountRow(
+            id=SINGLETON_ROW_ID,
+            cash=account.cash,
+            equity=account.equity,
+            initial_capital=account.initial_capital,
+            last_tick_at=account.last_tick_at,
+            last_bar_time=account.last_bar_time,
+            updated_at=account.updated_at,
+        )
+        with self._session_factory() as session, session.begin():
+            session.merge(row)
 
 
 class PostgresStrategyConfigRepository:
