@@ -8,13 +8,15 @@ backtest. The per-fold test curves are stitched into one continuous
 out-of-sample equity curve; on it we compute the full metric suite,
 including the deflated Sharpe and a block-bootstrap CI.
 
-Holdout discipline: everything here runs on data strictly before
-HOLDOUT_START. The holdout protocol lives in HOLDOUT.md at the repo root.
+Holdout discipline: everything here runs on data strictly before the
+evaluation window end (H2_EVAL_END, so H2 iterations stay comparable),
+which clamp_to_development additionally caps at HOLDOUT_START. The holdout
+protocol lives in HOLDOUT.md at the repo root.
 """
 
 import math
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from sklearn.metrics import roc_auc_score
 
 from tradingbot.adapters.parquet.store import ParquetStore
 from tradingbot.adapters.simulated.executor import SimulatedExecutor
+from tradingbot.application.holdout import H2_EVAL_END, clamp_to_development
 from tradingbot.application.run_backtest import HOLD_RULES, SLIPPAGE_RATE, TAKER_FEE_RATE
 from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, TradeRules
 from tradingbot.core.backtest.metrics import max_drawdown, sharpe_ratio
@@ -41,10 +44,6 @@ from tradingbot.core.models.walk_forward import Fold, WalkForwardConfig, walk_fo
 from tradingbot.core.ports.market_data import TIMEFRAME_SECONDS, Timeframe
 from tradingbot.core.signals.signal import Signal
 from tradingbot.core.strategies.hold import HoldStrategy
-
-HOLDOUT_START = datetime(2025, 7, 1, tzinfo=UTC)
-"""Start of the holdout period (see HOLDOUT.md). Data from this timestamp
-on is never touched by development — walk-forward runs clamp to before it."""
 
 TRIAL_SHARPES_ANNUALIZED: dict[str, float] = {
     "buy_and_hold": 0.21,
@@ -109,7 +108,9 @@ class WalkForwardReport:
     config: WalkForwardConfig
     threshold: float
     initial_capital: Decimal
-    holdout_start: datetime
+    eval_end: datetime
+    """End of the evaluation window this run was clamped to (H2_EVAL_END by
+    default; never past HOLDOUT_START)."""
     data_start: datetime
     data_end: datetime
     dataset_rows: int
@@ -175,16 +176,14 @@ def run_walk_forward(
     config: WalkForwardConfig | None = None,
     threshold: float = 0.6,
     initial_capital: Decimal = Decimal(10_000),
-    holdout_start: datetime = HOLDOUT_START,
+    eval_end: datetime = H2_EVAL_END,
     fee_rate: Decimal = TAKER_FEE_RATE,
     slippage_rate: Decimal = SLIPPAGE_RATE,
 ) -> WalkForwardReport:
     """Full purged walk-forward evaluation on the development data."""
     config = config if config is not None else WalkForwardConfig()
     ohlcv = ParquetStore(data_dir).read(symbol, timeframe)
-    dev = ohlcv.filter(pl.col("timestamp") < holdout_start)
-    if dev.is_empty():
-        raise ValueError(f"No {symbol} {timeframe} data before holdout start {holdout_start}")
+    dev = clamp_to_development(ohlcv, end=eval_end)
 
     dataset = build_dataset(dev)
     folds = walk_forward_folds(dataset.height, config)
@@ -285,7 +284,7 @@ def run_walk_forward(
         config=config,
         threshold=threshold,
         initial_capital=initial_capital,
-        holdout_start=holdout_start,
+        eval_end=eval_end,
         data_start=dev[0, "timestamp"],
         data_end=dev[-1, "timestamp"],
         dataset_rows=dataset.height,

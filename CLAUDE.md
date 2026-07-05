@@ -473,7 +473,8 @@ triple-barrier labels → XGBoost (xgb_v1) → MLStrategy. Slice 4: Postgres via
 SQLAlchemy 2.0 + Alembic, storage ports, FastAPI (VSA), SvelteKit dashboard
 with equity curves. Slice 3 (honest validation): purged walk-forward,
 deflated Sharpe, bootstrap CI, holdout protocol (`HOLDOUT.md`, boundary
-2025-07-01). Verdict: xgb_v1's *signal* survives OOS (IC 0.22 across all
+2026-07-04 after the 5 Jul 2026 rule-4 ruling; enforced in every dev entry
+point via `application/holdout.py`). Verdict: xgb_v1's *signal* survives OOS (IC 0.22 across all
 folds) but MLStrategy(threshold 0.6) is **rejected** (4 trades/15 months,
 OOS Sharpe −1.66 vs buy-and-hold 0.67). Tooling: ruff + basedpyright strict +
 pytest + pre-commit + CI. Architecture in **ADR-001** (_thin_ Hexagonal).

@@ -474,6 +474,14 @@ The canonical (extended) structure + data layout: see `CLAUDE.md`.
 - **Holdout boundary: 2025-07-01** (4 Jul 2026) — everything from that
   timestamp on is holdout (~12 months, growing as new bars arrive); protocol
   and usage log in `HOLDOUT.md`, clamp enforced in `run_walkforward.py`.
+  **Amended 5 Jul 2026: boundary moved to 2026-07-04** by applying HOLDOUT.md
+  rule 4 — review found the original holdout year had been observed at
+  aggregate level (full-history baseline backtests; `train.py`'s unclamped
+  validation split). The 2025-07 → 2026-07 year is development data now and
+  the holdout regrows from the new boundary. Enforcement centralized in
+  `application/holdout.py` and applied in every dev entry point (`train.py`,
+  `backtest.py`, walk-forward); H2's walk-forward keeps evaluating on data
+  before 2025-07-01 (`H2_EVAL_END`) so iterations stay comparable.
 - Supplementary spot training data: **not needed** (4 Jul 2026) — the 3.3y
   development window hosts 5 walk-forward folds / 15 OOS months, enough for
   a verdict; staying futures-only keeps microstructure and costs consistent

@@ -22,6 +22,7 @@ from typing import cast, get_args
 
 import polars as pl
 
+from tradingbot.application.holdout import HOLDOUT_START
 from tradingbot.application.run_walkforward import WalkForwardReport, run_walk_forward
 from tradingbot.core.models.walk_forward import WalkForwardConfig
 from tradingbot.core.ports.market_data import Timeframe
@@ -79,8 +80,9 @@ def render_markdown(report: WalkForwardReport, run_stamp: str) -> str:
         f"# Walk-forward report — {report.symbol} {report.timeframe} ({run_stamp})",
         "",
         f"- Development data: {report.data_start:%Y-%m-%d} -> {report.data_end:%Y-%m-%d}"
-        f" ({report.dataset_rows} dataset rows); holdout from"
-        f" {report.holdout_start:%Y-%m-%d} untouched (see HOLDOUT.md)",
+        f" ({report.dataset_rows} dataset rows); evaluation window ends"
+        f" {report.eval_end:%Y-%m-%d}; holdout from {HOLDOUT_START:%Y-%m-%d}"
+        f" untouched (see HOLDOUT.md)",
         f"- Splits: train {c.train_bars} bars, test {c.test_bars}, purge {c.purge_bars},"
         f" embargo {c.embargo_bars} -> {len(report.folds)} folds, model retrained per fold",
         f"- Strategy: long when P(target) >= {report.threshold}, v1 risk rules,"

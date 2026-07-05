@@ -39,7 +39,7 @@ def test_full_run_structure(data_dir: Path) -> None:
         "1h",
         config=SMALL,
         threshold=0.3,
-        holdout_start=FAR_FUTURE,
+        eval_end=FAR_FUTURE,
     )
 
     # 1200 dataset rows host 3 full test windows + one truncated (170 rows)
@@ -62,22 +62,22 @@ def test_full_run_structure(data_dir: Path) -> None:
     assert "this_run" in report.trial_sharpes_annualized
 
 
-def test_holdout_clamp_excludes_data_after_the_boundary(data_dir: Path) -> None:
+def test_eval_end_clamp_excludes_data_after_the_boundary(data_dir: Path) -> None:
     boundary = datetime(2024, 1, 1, tzinfo=UTC) + timedelta(hours=1000)
 
-    report = run_walk_forward(data_dir, "PF_XBTUSD", "1h", config=SMALL, holdout_start=boundary)
+    report = run_walk_forward(data_dir, "PF_XBTUSD", "1h", config=SMALL, eval_end=boundary)
 
     assert report.data_end < boundary
     # 1000 dev bars -> 939 dataset rows -> two full folds + one 109-row tail
     assert len(report.folds) == 3
 
 
-def test_no_data_before_holdout_raises(data_dir: Path) -> None:
-    with pytest.raises(ValueError, match="before holdout start"):
+def test_no_data_before_eval_end_raises(data_dir: Path) -> None:
+    with pytest.raises(ValueError, match="No data before development boundary"):
         run_walk_forward(
             data_dir,
             "PF_XBTUSD",
             "1h",
             config=SMALL,
-            holdout_start=datetime(2020, 1, 1, tzinfo=UTC),
+            eval_end=datetime(2020, 1, 1, tzinfo=UTC),
         )

@@ -2,16 +2,23 @@
 
 > The final exam of a strategy. Read this before touching any data after the
 > boundary below. Referenced from `ROADMAP.md` (Slice 3) and enforced in code
-> by `application/run_walkforward.py` (`HOLDOUT_START`).
+> by `application/holdout.py` (`HOLDOUT_START`).
 
 ## The boundary
 
-**Holdout = all PF_XBTUSD data with `timestamp >= 2025-07-01T00:00:00Z`.**
+**Holdout = all PF_XBTUSD data with `timestamp >= 2026-07-04T00:00:00Z`.**
 
 Everything before it is development data: walk-forward folds, feature work,
 label experiments, threshold and risk-rule choices all live there. The
-holdout is roughly the final 12 months of history and keeps growing as new
-bars arrive — data the strategy has genuinely never seen.
+holdout starts (nearly) empty and grows as new bars arrive (~720 per month)
+— data the strategy has genuinely never seen.
+
+**Boundary history:** originally 2025-07-01 (declared 4 Jul 2026). Moved to
+2026-07-04 on 5 Jul 2026 by applying rule 4 to two contamination events
+found in review (see the usage log below). Note for H2: its walk-forward
+iterations keep evaluating on data before 2025-07-01 (`H2_EVAL_END` in
+`application/holdout.py`) — not as holdout discipline but so iterations 2–5
+stay comparable to iteration 1, which was scored on exactly that window.
 
 ## Why it exists
 
@@ -47,8 +54,15 @@ data. The holdout answers one question those iterations cannot contaminate:
 
 ## Enforcement
 
-- `run_walk_forward()` clamps all data to `timestamp < HOLDOUT_START`
-  unconditionally; the walkforward CLI exposes no flag to cross it.
+- `application/holdout.py` owns the boundary; `clamp_to_development()` caps
+  every caller-supplied window at `HOLDOUT_START`, so no code path can cross
+  it.
+- Every development entry point that reads market data clamps through it:
+  `scripts/train.py`, the `run_strategy` use case behind `scripts/backtest.py`,
+  and `run_walk_forward()`. None of them exposes a flag to cross the boundary.
+- `scripts/backfill.py` deliberately does **not** clamp: collecting holdout
+  bars into Parquet is required — reading them during development is what's
+  forbidden.
 - The one-time holdout run will get its own explicitly named script when a
   strategy earns it — crossing the boundary must never be a default code path.
 
@@ -56,4 +70,6 @@ data. The holdout answers one question those iterations cannot contaminate:
 
 | Date | Strategy family | Verdict | Notes |
 |---|---|---|---|
-| — | — | — | never used |
+| 2026-07-03 | (market-level) | burned | Full-history backtests (buy-and-hold Sharpe 0.21, MA-cross −0.59, `ROADMAP.md` → "The honest numbers") were computed through 2026-07-02, observing aggregate behavior of the then-holdout year before the boundary was even declared. |
+| 2026-07-04 | xgb_v1 | burned | `scripts/train.py` had no clamp: its 70/30 chronological split put ~78% of the validation window past 2025-07-01, and the printed validation AUC 0.656 / IC 0.208 were read as development feedback. |
+| 2026-07-05 | — | rule 4 applied | Both events logged; boundary moved 2025-07-01 → 2026-07-04; clamps added to every dev entry point (this commit). The 2025-07 → 2026-07 year is development data now. |
