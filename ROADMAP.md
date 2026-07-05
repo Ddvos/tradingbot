@@ -20,10 +20,12 @@
 
 ## Current status — 2026-07-05
 
-**Phase:** Slices 0–4 done. Slice 3 (honest validation) closed the gate it
+**Phase:** Slices 0–5 built. Slice 3 (honest validation) closed the gate it
 guarded, with a split verdict: **the xgb_v1 signal survives out-of-sample;
 the strategy built on it does not** — see the walk-forward verdict below.
-Next is the decision point at the end of Slice 3.
+Slice 5 (paper trading) is code-complete but idle: promoting a strategy is
+gated on one that passes validation, so the open decision remains the
+Slice 3 decision point.
 
 Done:
 
@@ -93,6 +95,20 @@ functions, so they match the report exactly), stitched OOS equity curve,
 per-fold table (NaN/inf → null at the JSON boundary), and the report.md
 verdict. 116 tests total.
 
+- ✅ **Holdout enforcement + boundary move** (5 Jul 2026): review found two
+  rule-4 contamination events (full-history baselines; `train.py`'s
+  unclamped validation split) → boundary moved to **2026-07-04**, clamps
+  added to every dev entry point via `application/holdout.py`, both events
+  logged in `HOLDOUT.md`. Also fixed: `KrakenProvider` no longer returns
+  (and backfill no longer persists) the still-forming candle. 120 tests.
+- ✅ **Slice 5** (5 Jul 2026): paper trading, built while the strategy
+  question stays open (the machinery is strategy-agnostic). `TickEngine`
+  with tested backtest parity, `execute_tick` (idempotent, replays missed
+  bars), APScheduler runner + command listener, `positions` /
+  `bot_commands` / `paper_account` storage (migration 0002), `/live` API
+  (status, trades, pause/resume/promote/demote), dashboard paper section.
+  **Nothing is promoted** — see the Slice 5 gate note. 147 tests total.
+
 **Slice 2 scope notes:** features are 1h-only for now (multi-timeframe 4H/15M
 set deferred); labels are binary long-only; threshold 0.6 fixed a priori.
 
@@ -134,10 +150,11 @@ rejected, but the OOS IC says the underlying signal survives honest
 validation — so the hypothesis is not dead, and the iteration budget
 applies (max 5 per hypothesis; threshold/mapping changes count as
 iterations and must be re-validated through the same walk-forward). Decide:
-iterate on the prediction→position mapping, or fold the hypothesis. Slice 5
-(paper trading) stays gated on a strategy that passes. The feature axis was
-explored on 5 Jul (H3, null result) — the prediction→position mapping
-remains the open axis.
+iterate on the prediction→position mapping, or fold the hypothesis. The
+feature axis was explored on 5 Jul (H3, null result) — the
+prediction→position mapping remains the open axis. Slice 5 is built and
+waiting: the moment a candidate passes, promote it and the ≥4-week paper
+clock starts.
 
 **Running the stack (Slice 4):**
 
@@ -148,8 +165,13 @@ uv run alembic upgrade head                           # create/upgrade schema
 uv run python scripts/backtest.py --strategy buy_and_hold --save
 uv run python scripts/walkforward.py                  # honest eval (Slice 3), dev data only
 uv run uvicorn tradingbot.api.app:app --reload        # API on :8000
+uv run python -m tradingbot.live.runner               # paper bot (Slice 5), ticks hourly
 cd ../frontend && bun install && bun run dev          # dashboard on :5173
 ```
+
+The paper bot idles until a strategy config is promoted (dashboard →
+Paper trading, or `POST /live/promote`). Configs are saved rows in
+`strategy_configs` with a `kind` param (`hold`, `ma_cross`, `ml`).
 
 Configuration lives in `backend/.env` (copy from `.env.example`). Kraken API
 keys are **not** needed yet — the public charts API covers backfill; keys
@@ -363,23 +385,49 @@ stores the path; `trades` table exists but nothing writes it until the paper
 runner (Slice 5); the models/strategies endpoints return `[]` until
 `train.py --register` runs / configs are saved.
 
-### Slice 5 — Paper trading ⬜
+### Slice 5 — Paper trading ✅ (code-complete 5 Jul 2026 — see gate note)
 
 **Goal:** the live runner, but against live Kraken data + simulated execution.
 The two-process design (bot + API share the DB) goes live in paper mode.
 
 **Deliverables:**
 
-- [ ] `live/runner.py` — APScheduler 1h tick: fetch → features → predict →
-      signal → risk → (simulated) execute → persist
-- [ ] `live/command_listener.py` — polls DB flags (pause/resume/switch strategy)
-- [ ] `application/execute_tick.py` — KrakenProvider (live data) +
-      SimulatedExecutor (paper)
-- [ ] "Promoted strategy" pointer (one live strategy at a time)
-- [ ] Tests: tick loop against fakes
+- [x] `core/live/tick_engine.py` — `TickEngine`: one closed bar at a time,
+      restart-safe state, same barrier/sizing mechanics as the backtest
+      (shared pure functions extracted from `BacktestEngine`); **parity is
+      tested** — identical trades + cash on the same bars and signals
+- [x] `live/runner.py` — APScheduler 1h tick (HH:00:45 UTC): fetch → signal
+      → risk → (simulated) execute → persist; a failed tick never kills the
+      scheduler; missed bars replay in order on the next tick
+- [x] `live/command_listener.py` — polls DB flags every 30s (log visibility;
+      each tick re-reads the flags itself)
+- [x] `application/execute_tick.py` — KrakenProvider (live data, closed bars
+      only) + SimulatedExecutor (paper, pessimistic taker + slippage);
+      idempotent on no-new-bar
+- [x] "Promoted strategy" pointer — `bot_commands` singleton row (pause +
+      promoted config name), written by the API, read by the bot
+- [x] Storage: `positions` + `bot_commands` + `paper_account` tables,
+      ports + Postgres repos + in-memory fakes, Alembic migration 0002
+      (verified against Postgres 17)
+- [x] API: `/live/status`, `/live/trades`, `/live/pause|resume|promote|demote`
+- [x] Dashboard: paper-trading section (status card, controls, trades table)
+- [x] Tests: tick loop + engine parity + repos + API against fakes
+      (147 backend tests)
 
 **Done when:** the bot runs unattended on schedule in paper mode, writes paper
 trades to the DB, dashboard shows them. → then ≥4 weeks paper (live rules).
+
+**Gate note (5 Jul 2026):** the machinery is built and tested, but per the
+Slice 3 decision point **nothing is promoted**: promoting a real strategy
+still requires one that passes walk-forward. `hold` may be promoted as a
+smoke test of the loop (it goes all-in long — promote it knowingly, or just
+leave the bot idle). The ≥4-week paper clock starts only when a validated
+strategy is promoted.
+
+**Deferred within the slice:** real funding-rate data (paper charges the same
+flat pessimistic rate as the backtest — that parity is deliberate, see the
+decision log); retry/backoff on Kraken and crash-recovery chaos tests are
+Slice 6 as planned.
 
 ### Slice 6 — Live hardening (reliability) ⬜
 
@@ -426,7 +474,8 @@ backend/src/tradingbot/
 │   ├── signals/       # S1
 │   ├── strategies/    # base + ma_cross (S1) · ml_strategy (S2)
 │   ├── models/        # labeling + train + inference (S2) · walk_forward + evaluation (S3)
-│   ├── backtest/      # engine + metrics (S0, extended S1)
+│   ├── backtest/      # engine + metrics (S0, extended S1, shared helpers S5)
+│   ├── live/          # tick_engine (S5)
 │   └── risk/          # sizing (S1) · manager (S6)
 ├── adapters/
 │   ├── kraken/        # provider (S0) · executor (S7)
@@ -474,6 +523,14 @@ The canonical (extended) structure + data layout: see `CLAUDE.md`.
 - **Holdout boundary: 2025-07-01** (4 Jul 2026) — everything from that
   timestamp on is holdout (~12 months, growing as new bars arrive); protocol
   and usage log in `HOLDOUT.md`, clamp enforced in `run_walkforward.py`.
+  **Amended 5 Jul 2026: boundary moved to 2026-07-04** by applying HOLDOUT.md
+  rule 4 — review found the original holdout year had been observed at
+  aggregate level (full-history baseline backtests; `train.py`'s unclamped
+  validation split). The 2025-07 → 2026-07 year is development data now and
+  the holdout regrows from the new boundary. Enforcement centralized in
+  `application/holdout.py` and applied in every dev entry point (`train.py`,
+  `backtest.py`, walk-forward); H2's walk-forward keeps evaluating on data
+  before 2025-07-01 (`H2_EVAL_END`) so iterations stay comparable.
 - Supplementary spot training data: **not needed** (4 Jul 2026) — the 3.3y
   development window hosts 5 walk-forward folds / 15 OOS months, enough for
   a verdict; staying futures-only keeps microstructure and costs consistent
@@ -488,6 +545,24 @@ The canonical (extended) structure + data layout: see `CLAUDE.md`.
   a-priori parameters, success criteria — *before* its evaluation runs;
   verdicts are appended, never edited. First use: H3 (market-structure
   features) → null result, keep the 13-feature set.
+- **Tick execution model** (5 Jul 2026): the paper/live tick processes the
+  just-closed bar exactly as the backtest does (barriers against its
+  high/low with stop-wins-ties, funding + time exit at its close) and fills
+  the fresh signal at tick time — the last close standing in for the next
+  open, a gap well inside the slippage assumption. Parity is enforced by a
+  test that runs the same bars/signals through both engines and demands
+  identical trades and cash. Shared mechanics live as pure functions in
+  `core/backtest/engine.py`; `TickEngine` in `core/live/`.
+- **Paper funding stays flat** (5 Jul 2026, amends the 4 Jul funding
+  decision): paper charges the same flat pessimistic rate the backtest
+  charges, so a paper run is comparable to the walk-forward verdict that
+  justified promoting the strategy. The real funding-rate adapter moves to
+  Slice 6/7 with the other live-hardening work — live capital genuinely
+  needs it; paper parity is better served without it.
+- **Promotion by config name** (5 Jul 2026): `bot_commands` (singleton row)
+  holds `is_paused` + `promoted_strategy` (a `strategy_configs.name`); the
+  API validates the name on promote. One live strategy at a time, exactly
+  as CLAUDE.md prescribes.
 
 **Open (decide later, not now):**
 

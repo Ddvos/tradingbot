@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from tradingbot.adapters.parquet.store import ParquetStore
 from tradingbot.adapters.simulated.executor import SimulatedExecutor
+from tradingbot.application.holdout import clamp_to_development
 from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, TradeRules
 from tradingbot.core.backtest.metrics import PERIODS_PER_YEAR_1H, max_drawdown, sharpe_ratio
 from tradingbot.core.ports.market_data import Timeframe
@@ -45,8 +46,9 @@ def run_strategy(
     fee_rate: Decimal = TAKER_FEE_RATE,
     slippage_rate: Decimal = SLIPPAGE_RATE,
 ) -> BacktestReport:
-    store = ParquetStore(data_dir)
-    ohlcv = store.read(symbol, timeframe)
+    # Development data only — exploratory backtests must never observe the
+    # holdout, not even at aggregate level (HOLDOUT.md, rule 4).
+    ohlcv = clamp_to_development(ParquetStore(data_dir).read(symbol, timeframe))
 
     executor = SimulatedExecutor(fee_rate=fee_rate, slippage_rate=slippage_rate)
     engine = BacktestEngine(

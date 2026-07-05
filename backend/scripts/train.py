@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from tradingbot.adapters.filesystem.model_store import ModelStore
 from tradingbot.adapters.parquet.store import ParquetStore
+from tradingbot.application.holdout import clamp_to_development
 from tradingbot.application.persistence import build_postgres_repositories
 from tradingbot.config.settings import Settings
 from tradingbot.core.models.dataset import build_dataset
@@ -55,7 +56,8 @@ def main() -> None:
     args = parser.parse_args(namespace=_Args())
     timeframe = cast(Timeframe, args.timeframe)  # narrowed by argparse choices
 
-    ohlcv = ParquetStore(args.data_dir).read(args.symbol, timeframe)
+    # Development data only — training must never see the holdout (HOLDOUT.md).
+    ohlcv = clamp_to_development(ParquetStore(args.data_dir).read(args.symbol, timeframe))
     dataset = build_dataset(ohlcv)
     print(
         f"Dataset: {dataset.height} rows from {ohlcv.height} bars "

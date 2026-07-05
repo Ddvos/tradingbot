@@ -466,21 +466,26 @@ class MarketDataProvider(Protocol):                      # Protocol for ports
 *where we are* and *what the next step is*. Update `ROADMAP.md` in the same
 commit as the code.
 
-In short (as of 5 Jul 2026): **Slices 0–4 done** — full pipeline runs on
+In short (as of 5 Jul 2026): **Slices 0–5 built** — full pipeline runs on
 real data with pessimistic costs incl. funding; baseline to beat: buy-and-hold
 Sharpe 0.21. MA-cross hypothesis rejected (cost churn). ML pipeline exists:
 triple-barrier labels → XGBoost (xgb_v1) → MLStrategy. Slice 4: Postgres via
 SQLAlchemy 2.0 + Alembic, storage ports, FastAPI (VSA), SvelteKit dashboard
 with equity curves. Slice 3 (honest validation): purged walk-forward,
 deflated Sharpe, bootstrap CI, holdout protocol (`HOLDOUT.md`, boundary
-2025-07-01). Verdict: xgb_v1's *signal* survives OOS (IC 0.22 across all
+2026-07-04 after the 5 Jul 2026 rule-4 ruling; enforced in every dev entry
+point via `application/holdout.py`). Slice 5 (paper trading): `TickEngine`
+with tested backtest parity, `execute_tick`, APScheduler runner + command
+listener, live-state storage (positions/bot_commands/paper_account), `/live`
+API + dashboard section — **idle until a strategy passes validation**. Verdict: xgb_v1's *signal* survives OOS (IC 0.22 across all
 folds) but MLStrategy(threshold 0.6) is **rejected** (4 trades/15 months,
 OOS Sharpe −1.66 vs buy-and-hold 0.67). Tooling: ruff + basedpyright strict +
 pytest + pre-commit + CI. Architecture in **ADR-001** (_thin_ Hexagonal).
 Hypotheses are pre-registered in `HYPOTHESES.md` before evaluation (H3
 market-structure features: null result, 5 Jul 2026).
 **Next step:** the Slice 3 decision point — iterate on the signal→position
-mapping (max 5 iterations) or fold the hypothesis.
+mapping (max 5 iterations) or fold the hypothesis. Paper trading is built
+and waiting for the first candidate that passes.
 
 ## External references
 

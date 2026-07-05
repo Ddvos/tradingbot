@@ -11,7 +11,7 @@ touches the database.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from tradingbot.api.deps import get_repositories, get_walkforward_dir
+from tradingbot.api.deps import get_paper_symbol, get_repositories, get_walkforward_dir
 from tradingbot.api.features.backtests.routes import router as backtests_router
 from tradingbot.api.features.live.routes import router as live_router
 from tradingbot.api.features.models.routes import router as models_router
@@ -48,6 +48,7 @@ def create_app(
     )
     app.dependency_overrides[get_repositories] = lambda: repos
     app.dependency_overrides[get_walkforward_dir] = lambda: resolved.walkforward_dir
+    app.dependency_overrides[get_paper_symbol] = lambda: resolved.paper_symbol
 
     app.add_api_route("/health", _health, methods=["GET"], tags=["health"])
     app.include_router(backtests_router)

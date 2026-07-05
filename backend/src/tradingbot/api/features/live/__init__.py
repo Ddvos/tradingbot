@@ -1,1 +1,1 @@
-"""API slice: live/paper status + commands (pause/resume/switch). Slice 4."""
+"""API slice: live/paper status + commands (pause/resume/promote). Slice 5."""

@@ -7,8 +7,14 @@ Pydantic validates and coerces at this system boundary.
 
 Note: PF_XBTUSD 1h history starts 2022-03-23 — the API returns an empty list
 for anything earlier (verified 2 Jul 2026).
+
+The API also returns the currently *forming* candle (verified 5 Jul 2026), so
+fetch_ohlcv drops any candle that has not closed yet: a non-final bar would
+violate the causality contract (core.strategies.base) and, via backfill,
+persist values that change until the hour closes.
 """
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import httpx
@@ -42,19 +48,28 @@ class _ChartsResponse(BaseModel):
 class KrakenProvider:
     """Implements the MarketDataProvider port against Kraken Futures."""
 
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
         self._client = client or httpx.Client(base_url=BASE_URL, timeout=30.0)
+        self._now = now if now is not None else lambda: datetime.now(UTC)
 
     def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, since: datetime) -> pl.DataFrame:
-        candles: list[_Candle] = []
+        fetched: list[_Candle] = []
         start = int(since.timestamp())
-        end = int(datetime.now(UTC).timestamp())
+        end = int(self._now().timestamp())
         while start < end:
             page = self._fetch_page(symbol, timeframe, start, end)
-            candles.extend(page.candles)
+            fetched.extend(page.candles)
             if not page.more_candles or not page.candles:
                 break
             start = page.candles[-1].time // 1000 + TIMEFRAME_SECONDS[timeframe]
+
+        # Closed bars only: a candle opening at t is final once t + timeframe
+        # has passed. The API happily serves the still-forming one.
+        candles = [c for c in fetched if c.time // 1000 + TIMEFRAME_SECONDS[timeframe] <= end]
 
         df = (
             pl.DataFrame(

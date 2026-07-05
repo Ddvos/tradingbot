@@ -9,11 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.fakes import (
-    InMemoryBacktestRunRepository,
-    InMemoryModelRegistry,
-    InMemoryStrategyConfigRepository,
-    InMemoryTradeRepository,
     make_config_record,
+    make_fake_repositories,
     make_model_record,
     make_run_record,
 )
@@ -24,12 +21,7 @@ from tradingbot.config.settings import Settings
 
 @pytest.fixture
 def repos() -> Repositories:
-    return Repositories(
-        backtest_runs=InMemoryBacktestRunRepository(),
-        trades=InMemoryTradeRepository(),
-        models=InMemoryModelRegistry(),
-        strategy_configs=InMemoryStrategyConfigRepository(),
-    )
+    return make_fake_repositories()
 
 
 @pytest.fixture
@@ -119,7 +111,7 @@ def test_strategies_list(client: TestClient, repos: Repositories) -> None:
     assert listed[0]["params"] == {"fast": 20, "slow": 50}
 
 
-def test_live_status_stub(client: TestClient) -> None:
+def test_live_status_idle_before_any_state_exists(client: TestClient) -> None:
     response = client.get("/live/status")
     assert response.status_code == 200
-    assert response.json()["state"] == "offline"
+    assert response.json()["state"] == "idle"

@@ -6,6 +6,8 @@ migration against a real database. SQLite stores Numeric as float, hence the
 SAWarning filter — values with ≤8 decimals still round-trip exactly.
 """
 
+from dataclasses import replace
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -15,13 +17,18 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.fakes import (
     make_config_record,
     make_model_record,
+    make_paper_account_record,
+    make_position_record,
     make_run_record,
     make_trade_record,
 )
 from tradingbot.adapters.postgres.engine import create_session_factory
 from tradingbot.adapters.postgres.repositories import (
     PostgresBacktestRunRepository,
+    PostgresBotCommandRepository,
     PostgresModelRegistry,
+    PostgresPaperAccountRepository,
+    PostgresPositionRepository,
     PostgresStrategyConfigRepository,
     PostgresTradeRepository,
 )
@@ -105,3 +112,63 @@ class TestStrategyConfigRepository:
 
         assert repo.get_by_name(record.name) == record
         assert repo.list_configs() == [record]
+
+
+class TestPositionRepository:
+    def test_roundtrip_and_delete(self, session_factory: sessionmaker[Session]) -> None:
+        repo = PostgresPositionRepository(session_factory)
+        record = make_position_record()
+
+        repo.save(record)
+        assert repo.get_open("PF_XBTUSD") == record
+        assert repo.get_open("PF_ETHUSD") is None
+
+        repo.delete(record.id)
+        assert repo.get_open("PF_XBTUSD") is None
+
+    def test_save_updates_in_place(self, session_factory: sessionmaker[Session]) -> None:
+        repo = PostgresPositionRepository(session_factory)
+        record = make_position_record(bars_held=0)
+        repo.save(record)
+
+        repo.save(replace(record, bars_held=3))
+
+        loaded = repo.get_open("PF_XBTUSD")
+        assert loaded is not None
+        assert loaded.bars_held == 3
+
+
+class TestBotCommandRepository:
+    def test_missing_row_returns_none(self, session_factory: sessionmaker[Session]) -> None:
+        assert PostgresBotCommandRepository(session_factory).get() is None
+
+    def test_flags_update_independently(self, session_factory: sessionmaker[Session]) -> None:
+        repo = PostgresBotCommandRepository(session_factory)
+
+        repo.set_promoted("hold")
+        repo.set_paused(True)
+
+        commands = repo.get()
+        assert commands is not None
+        assert commands.is_paused is True
+        assert commands.promoted_strategy == "hold"
+
+        repo.set_paused(False)
+        commands = repo.get()
+        assert commands is not None
+        assert commands.is_paused is False
+        assert commands.promoted_strategy == "hold"
+
+
+class TestPaperAccountRepository:
+    def test_roundtrip_upserts_singleton(self, session_factory: sessionmaker[Session]) -> None:
+        repo = PostgresPaperAccountRepository(session_factory)
+        assert repo.get() is None
+
+        repo.save(make_paper_account_record())
+        repo.save(make_paper_account_record(cash=Decimal("9500.00")))
+
+        loaded = repo.get()
+        assert loaded is not None
+        assert loaded.cash == Decimal("9500.00")
+        assert loaded.last_bar_time is None

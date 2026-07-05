@@ -11,6 +11,7 @@
 		type WalkforwardRun
 	} from '$lib/api';
 	import EquityChart from '$lib/EquityChart.svelte';
+	import PaperTrading from '$lib/PaperTrading.svelte';
 
 	let runs = $state<BacktestRun[]>([]);
 	let selected = $state<BacktestRun | null>(null);
@@ -94,6 +95,8 @@
 		<h1 class="text-2xl font-semibold text-gray-900">TradingBot</h1>
 		<p class="text-sm text-gray-500">PF_XBTUSD backtests — honest numbers, pessimistic costs</p>
 	</header>
+
+	<PaperTrading />
 
 	{#if error}
 		<p class="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">

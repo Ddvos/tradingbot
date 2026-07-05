@@ -39,6 +39,18 @@ async function get<T>(path: string): Promise<T> {
 	return response.json() as Promise<T>;
 }
 
+async function post<T>(path: string, body?: unknown): Promise<T> {
+	const response = await fetch(`${BASE_URL}${path}`, {
+		method: 'POST',
+		headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+		body: body === undefined ? undefined : JSON.stringify(body)
+	});
+	if (!response.ok) {
+		throw new Error(`API ${path} failed: ${response.status} ${response.statusText}`);
+	}
+	return response.json() as Promise<T>;
+}
+
 export interface WalkforwardRun {
 	symbol: string;
 	run: string; // folder name {timeframe}_{name}_{stamp} — the API identifier
@@ -92,3 +104,71 @@ export const fetchWalkforwardDetail = (symbol: string, run: string): Promise<Wal
 
 export const fetchWalkforwardEquity = (symbol: string, run: string): Promise<WalkforwardEquity> =>
 	get(`/walkforward/${symbol}/${run}/equity`);
+
+// --- Paper trading (live runner) ---
+// "idle" = nothing promoted. Decimal money fields arrive as strings (or numbers)
+// and are null before the runner's first tick — convert with Number() for display.
+
+export type LiveState = 'running' | 'paused' | 'idle';
+export type Side = 'buy' | 'sell';
+export type ExitReason = 'signal' | 'stop_loss' | 'take_profit' | 'time';
+
+export interface LivePosition {
+	strategy: string;
+	symbol: string;
+	side: Side;
+	quantity: string | number;
+	entry_price: string | number;
+	entry_time: string;
+	stop: string | number | null;
+	take_profit: string | number | null;
+	bars_held: number;
+}
+
+export interface LiveStatus {
+	state: LiveState;
+	promoted_strategy: string | null;
+	last_tick_at: string | null;
+	last_bar_time: string | null;
+	cash: string | number | null;
+	equity: string | number | null;
+	initial_capital: string | number | null;
+	position: LivePosition | null;
+}
+
+export interface PaperTrade {
+	id: string;
+	strategy: string;
+	symbol: string;
+	side: Side;
+	quantity: string | number;
+	entry_price: string | number;
+	exit_price: string | number;
+	entry_time: string;
+	exit_time: string;
+	pnl: string | number;
+	fees: string | number;
+	exit_reason: ExitReason;
+}
+
+export interface StrategyConfig {
+	id: string;
+	name: string;
+	params: Record<string, string | number | boolean>;
+	created_at: string;
+}
+
+export const fetchLiveStatus = (): Promise<LiveStatus> => get('/live/status');
+
+export const fetchLiveTrades = (): Promise<PaperTrade[]> => get('/live/trades');
+
+export const fetchStrategies = (): Promise<StrategyConfig[]> => get('/strategies');
+
+export const pauseLive = (): Promise<LiveStatus> => post('/live/pause');
+
+export const resumeLive = (): Promise<LiveStatus> => post('/live/resume');
+
+export const demoteLive = (): Promise<LiveStatus> => post('/live/demote');
+
+export const promoteStrategy = (name: string): Promise<LiveStatus> =>
+	post('/live/promote', { name });
