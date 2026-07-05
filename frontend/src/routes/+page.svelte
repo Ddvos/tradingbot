@@ -11,6 +11,7 @@
 		type WalkforwardRun
 	} from '$lib/api';
 	import EquityChart from '$lib/EquityChart.svelte';
+	import PaperTrading from '$lib/PaperTrading.svelte';
 
 	let runs = $state<BacktestRun[]>([]);
 	let selected = $state<BacktestRun | null>(null);

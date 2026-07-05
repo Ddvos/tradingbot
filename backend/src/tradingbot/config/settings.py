@@ -5,6 +5,7 @@ fallback (copy `.env.example` and fill in). Secrets are `SecretStr` so they
 never leak into logs or reprs.
 """
 
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import SecretStr
@@ -20,6 +21,16 @@ class Settings(BaseSettings):
     walkforward_dir: Path = Path("data/processed/walkforward")
     """Where scripts/walkforward.py writes its run artifacts. Relative to the
     process working directory — backend/, matching how uvicorn is started."""
+
+    models_dir: Path = Path("data/models")
+    """Where trained .joblib artifacts live (scripts/train.py writes here).
+    Relative to the process working directory — backend/."""
+
+    paper_symbol: str = "PF_XBTUSD"
+    """The instrument the paper runner trades and the API reports on."""
+
+    paper_initial_capital: Decimal = Decimal(10_000)
+    """Starting cash of the paper account, set on the bot's first tick."""
 
     kraken_api_key: SecretStr = SecretStr("")
     kraken_api_secret: SecretStr = SecretStr("")
