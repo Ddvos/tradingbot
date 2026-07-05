@@ -7,13 +7,19 @@ against a backtest is search-until-profitable.
 """
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 import polars as pl
 
+from tradingbot.core.backtest.engine import TradeRules
 from tradingbot.core.models.artifact import ModelArtifact
 from tradingbot.core.models.dataset import feature_expressions
 from tradingbot.core.models.inference import predict_probabilities
 from tradingbot.core.signals.signal import Signal
+
+ML_TRADE_RULES = TradeRules(take_profit_atr=Decimal("2.0"))
+"""v1 risk rules with the take-profit aligned to the label's 2.0x ATR upper
+barrier (see core.models.labeling) instead of the generic 3.0x default."""
 
 
 @dataclass(frozen=True)

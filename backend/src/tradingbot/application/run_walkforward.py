@@ -44,6 +44,7 @@ from tradingbot.core.models.walk_forward import Fold, WalkForwardConfig, walk_fo
 from tradingbot.core.ports.market_data import TIMEFRAME_SECONDS, Timeframe
 from tradingbot.core.signals.signal import Signal
 from tradingbot.core.strategies.hold import HoldStrategy
+from tradingbot.core.strategies.ml_strategy import ML_TRADE_RULES
 
 TRIAL_SHARPES_ANNUALIZED: dict[str, float] = {
     "buy_and_hold": 0.21,
@@ -58,10 +59,6 @@ candidate BEFORE looking at its results. The ma-cross run under v1 exit
 rules (-10.1) is deliberately absent — it is the same hypothesis as the
 trend-exit variant under mismatched exit mechanics (ROADMAP finding #2),
 a diagnostic, not an independent candidate."""
-
-ML_TRADE_RULES = TradeRules(take_profit_atr=Decimal("2.0"))
-"""v1 risk rules with the take-profit aligned to the label's 2.0x ATR upper
-barrier (see core.models.labeling) instead of the generic 3.0x default."""
 
 SECONDS_PER_YEAR = 365 * 24 * 3600
 
