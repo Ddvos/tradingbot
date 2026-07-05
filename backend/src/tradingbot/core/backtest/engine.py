@@ -91,6 +91,63 @@ class _OpenPosition:
     take_profit: Decimal | None
 
 
+def check_barriers(
+    quantity: Decimal,
+    stop: Decimal | None,
+    take_profit: Decimal | None,
+    high: Decimal,
+    low: Decimal,
+) -> tuple[ExitReason, Decimal] | None:
+    """Which barrier a bar's range triggers, and the price to fill at.
+
+    Stop wins ties (pessimistic). Shared by BacktestEngine and the live
+    TickEngine so both resolve barriers identically — that parity is the
+    point of the extraction.
+    """
+    if quantity > 0:
+        if stop is not None and low <= stop:
+            return (ExitReason.STOP_LOSS, stop)
+        if take_profit is not None and high >= take_profit:
+            return (ExitReason.TAKE_PROFIT, take_profit)
+    else:
+        if stop is not None and high >= stop:
+            return (ExitReason.STOP_LOSS, stop)
+        if take_profit is not None and low <= take_profit:
+            return (ExitReason.TAKE_PROFIT, take_profit)
+    return None
+
+
+def rules_require_atr(rules: TradeRules) -> bool:
+    return (
+        rules.risk_pct is not None
+        or rules.stop_atr is not None
+        or rules.take_profit_atr is not None
+    )
+
+
+def entry_quantity(
+    rules: TradeRules, balance: Decimal, price: Decimal, entry_atr: Decimal | None
+) -> Decimal:
+    """Position size under the rules: risk-from-stop when configured, all-in otherwise."""
+    if rules.risk_pct is not None and rules.stop_atr is not None and entry_atr is not None:
+        return position_size(balance, price, entry_atr, rules.risk_pct, rules.stop_atr)
+    return all_in_size(balance, price)
+
+
+def barrier_prices(
+    rules: TradeRules, fill_price: Decimal, sign: Decimal, entry_atr: Decimal | None
+) -> tuple[Decimal | None, Decimal | None]:
+    """(stop, take_profit) around the actual fill price, or None per disabled rule."""
+    stop = None
+    take_profit = None
+    if entry_atr is not None:
+        if rules.stop_atr is not None:
+            stop = fill_price - sign * rules.stop_atr * entry_atr
+        if rules.take_profit_atr is not None:
+            take_profit = fill_price + sign * rules.take_profit_atr * entry_atr
+    return stop, take_profit
+
+
 class BacktestEngine:
     """Stateful runner: walks bars chronologically, reconciles position to signal."""
 
@@ -200,35 +257,20 @@ class BacktestEngine:
         index: int,
     ) -> None:
         rules = self._rules
-        needs_atr = (
-            rules.risk_pct is not None
-            or rules.stop_atr is not None
-            or rules.take_profit_atr is not None
-        )
         entry_atr_dec: Decimal | None = None
-        if needs_atr:
+        if rules_require_atr(rules):
             if entry_atr is None or entry_atr <= 0:
                 return  # cannot size or place barriers without a valid ATR yet
             entry_atr_dec = Decimal(str(entry_atr))
 
-        if rules.risk_pct is not None and rules.stop_atr is not None and entry_atr_dec is not None:
-            quantity = position_size(
-                self._cash, price, entry_atr_dec, rules.risk_pct, rules.stop_atr
-            )
-        else:
-            quantity = all_in_size(self._cash, price)
+        quantity = entry_quantity(rules, self._cash, price, entry_atr_dec)
         if quantity <= 0:
             return
 
         side = Side.BUY if target > 0 else Side.SELL
         fill = self._execute(symbol, side, quantity, ts, price)
         sign = Decimal(target)
-        stop = None
-        take_profit = None
-        if rules.stop_atr is not None and entry_atr_dec is not None:
-            stop = fill.price - sign * rules.stop_atr * entry_atr_dec
-        if rules.take_profit_atr is not None and entry_atr_dec is not None:
-            take_profit = fill.price + sign * rules.take_profit_atr * entry_atr_dec
+        stop, take_profit = barrier_prices(rules, fill.price, sign, entry_atr_dec)
         self._position = _OpenPosition(sign * fill.quantity, fill, index, stop, take_profit)
 
     def _close_position(
@@ -249,12 +291,7 @@ class BacktestEngine:
         position = self._position
         if position is None:
             return
-        if position.quantity > 0:
-            if position.stop is not None and low_p <= position.stop:
-                self._close_position(symbol, ts, position.stop, ExitReason.STOP_LOSS)
-            elif position.take_profit is not None and high_p >= position.take_profit:
-                self._close_position(symbol, ts, position.take_profit, ExitReason.TAKE_PROFIT)
-        elif position.stop is not None and high_p >= position.stop:
-            self._close_position(symbol, ts, position.stop, ExitReason.STOP_LOSS)
-        elif position.take_profit is not None and low_p <= position.take_profit:
-            self._close_position(symbol, ts, position.take_profit, ExitReason.TAKE_PROFIT)
+        hit = check_barriers(position.quantity, position.stop, position.take_profit, high_p, low_p)
+        if hit is not None:
+            reason, reference_price = hit
+            self._close_position(symbol, ts, reference_price, reason)
