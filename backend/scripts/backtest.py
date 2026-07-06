@@ -23,6 +23,7 @@ from tradingbot.application.run_backtest import (
     run_ma_cross,
     run_ma_cross_trend,
     run_structure_trend,
+    run_ts_momentum,
     to_run_record,
     trades_frame,
     trades_path_for,
@@ -31,6 +32,7 @@ from tradingbot.config.settings import Settings
 from tradingbot.core.ports.market_data import Timeframe
 from tradingbot.core.ports.storage import ParamValue
 from tradingbot.core.strategies.structure_trend import StructureTrendStrategy
+from tradingbot.core.strategies.ts_momentum import TSMomentumStrategy
 
 BACKEND_DIR = Path(__file__).parent.parent
 DEFAULT_DATA_DIR = BACKEND_DIR / "data" / "raw" / "ohlcv"
@@ -70,7 +72,7 @@ def main() -> None:
     parser.add_argument(
         "--strategy",
         default="ma_cross",
-        choices=["ma_cross", "ma_cross_trend", "structure_trend", "buy_and_hold"],
+        choices=["ma_cross", "ma_cross_trend", "structure_trend", "ts_momentum", "buy_and_hold"],
     )
     parser.add_argument("--fast", type=int, default=20)
     parser.add_argument("--slow", type=int, default=50)
@@ -97,6 +99,8 @@ def main() -> None:
         )
     elif args.strategy == "structure_trend":
         report = run_structure_trend(args.data_dir, args.symbol, timeframe, args.capital)
+    elif args.strategy == "ts_momentum":
+        report = run_ts_momentum(args.data_dir, args.symbol, timeframe, args.capital)
     else:
         report = run_buy_and_hold(args.data_dir, args.symbol, timeframe, args.capital)
 
@@ -122,6 +126,8 @@ def main() -> None:
             params = {"fast": args.fast, "slow": args.slow}
         elif args.strategy == "structure_trend":
             params = {"k": StructureTrendStrategy().k}
+        elif args.strategy == "ts_momentum":
+            params = {"lookback": TSMomentumStrategy().lookback}
         record = to_run_record(report, args.strategy, args.symbol, timeframe, params, out_path)
         repositories = build_postgres_repositories(Settings().database_url)
         repositories.backtest_runs.add(record)

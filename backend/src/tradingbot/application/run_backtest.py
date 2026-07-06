@@ -31,6 +31,7 @@ from tradingbot.core.strategies.base import Strategy
 from tradingbot.core.strategies.hold import HoldStrategy
 from tradingbot.core.strategies.ma_cross import MACrossStrategy
 from tradingbot.core.strategies.structure_trend import StructureTrendStrategy
+from tradingbot.core.strategies.ts_momentum import TSMomentumStrategy
 
 TAKER_FEE_RATE = Decimal("0.0005")
 SLIPPAGE_RATE = Decimal("0.001")
@@ -217,4 +218,20 @@ def run_structure_trend(
     """
     return run_strategy(
         StructureTrendStrategy(), HOLD_RULES, data_dir, symbol, timeframe, initial_capital
+    )
+
+
+def run_ts_momentum(
+    data_dir: Path,
+    symbol: str,
+    timeframe: Timeframe,
+    initial_capital: Decimal,
+) -> BacktestReport:
+    """Daily time-series momentum (HYPOTHESES.md → H5), signal-only exits.
+
+    The lookback is fixed a priori in the strategy and deliberately not
+    exposed here — same reasoning as structure_trend's k.
+    """
+    return run_strategy(
+        TSMomentumStrategy(), HOLD_RULES, data_dir, symbol, timeframe, initial_capital
     )

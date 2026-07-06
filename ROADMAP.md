@@ -20,12 +20,15 @@
 
 ## Current status — 2026-07-06
 
-**Phase:** Slices 0–5 built. Slice 3 (honest validation) closed the gate it
-guarded, with a split verdict: **the xgb_v1 signal survives out-of-sample;
-the strategy built on it does not** — see the walk-forward verdict below.
-Slice 5 (paper trading) is code-complete but idle: promoting a strategy is
-gated on one that passes validation, so the open decision remains the
-Slice 3 decision point.
+**Phase:** Slices 0–5 built. The H2 (ML) hypothesis is **folded** after 3
+of 5 iterations — the signal was real, the bet its label defined was not
+clearable after costs (see the fold decision in `HYPOTHESES.md`). **H5
+(daily time-series momentum) is the first candidate to pass a
+pre-registered gate** (weak evidence — see the verdict below); its next
+OOS test is paper trading, which needs 1d-tick runner support first. H6
+(funding carry) is registered with its evaluation deferred to ≈ Jul 2027
+while the funding archive grows — monthly backfills are a standing
+obligation.
 
 Done:
 
@@ -146,6 +149,34 @@ diagnosis. IC held at 0.188 (above the pre-registered 0.10 floor). The
 failure mode is the long-only regime conversion itself. 167 tests total.
 Three of five H2 iterations spent.
 
+**H2 folded (6 Jul 2026).** Iterations 4–5 not spent — arithmetic instead:
+the triple-barrier bet breaks even at ~43% win probability pre-cost,
+~55–60% after costs, a region this model's probability distribution
+(base rate 0.18, AUC 0.66) essentially never reaches — threshold 0.6's 4
+trades in 15 months were the model *correctly* declining the bet. Full
+reasoning in `HYPOTHESES.md` → H2 fold decision. What survives: the whole
+pipeline, and the lesson that a stable OOS IC is not sufficient — the
+label must define a bet the model's confidence can clear after costs.
+
+**H5 — daily time-series momentum (6 Jul 2026): first pre-registered gate
+ever passed.** Sign of the trailing 90d return, long/short, 1d bars,
+signal-only exits (`TSMomentumStrategy`, pre-registered in
+`HYPOTHESES.md`). All three criteria met: Sharpe 0.33 > 1d buy-and-hold
+0.22, PF 1.44, 56 trades; €10,000 → €12,391, max DD −52.8% vs −70.6%.
+Honest caveats computed and recorded: bootstrap CI [−0.58, 1.25],
+P(SR>0) 0.756, deflated Sharpe vs 9 trials ≈ 0.003 — candidacy, not
+belief. Next OOS gate is paper trading (holdout is 2 days old); promotion
+needs 1d-tick runner support + a `ts_momentum` config kind.
+
+**H6 — funding-rate carry registered; funding pipeline built (6 Jul
+2026).** Kraken serves hourly funding but only the trailing ~12 months →
+the local archive is the system of record: `FundingStore`
+(`data/raw/funding/{symbol}.parquet`), `KrakenProvider.fetch_funding_rates`,
+`scripts/backfill_funding.py` (**run at least monthly** or history is
+lost; first 8,859 settlements archived). Hypothesis, spec, and criteria
+are pre-registered now with a-priori thresholds; evaluation deferred
+until the archive spans ≥ 24 months (≈ Jul 2027). 175 tests total.
+
 **Hypothesis H4 — structure trend-following (5 Jul 2026):** pure price
 action, long/short: higher highs + higher lows → long, the mirror → short,
 position flips only on a fully confirmed opposite structure (k=3 swings
@@ -157,15 +188,18 @@ profit factor 0.83, 1,388 structure flips (3× MA-cross's churn),
 **Slice 2 scope notes:** features are 1h-only for now (multi-timeframe 4H/15M
 set deferred); labels are binary long-only; threshold 0.6 fixed a priori.
 
-**The honest numbers** (PF_XBTUSD 1h, 2022-03-23 → 2026-07-02, 37,499 bars,
-pessimistic costs: 0.05% taker, 0.1% slippage, ~11%/yr flat funding):
+**The honest numbers** (PF_XBTUSD, development window 2022-03-23 →
+2026-07-03, pessimistic costs: 0.05% taker, 0.1% slippage, ~11%/yr flat
+funding scaled to bar duration):
 
 | Run | Sharpe | Max DD | €10,000 → |
 |---|---|---|---|
-| Buy-and-hold (**the baseline to beat**) | **0.21** | −71% | €7,963 |
-| MA-cross 20/50, v1 risk rules (6-bar time exit) | −10.1 | −100% | €0.11 |
-| MA-cross 20/50, signal-only exits | −0.59 | −70% | €3,330 |
-| Structure trend k=3, signal-only exits (H4) | −2.45 | −99.8% | €34 |
+| Buy-and-hold 1h (**the baseline to beat**) | **0.21** | −71% | €7,963 |
+| Buy-and-hold 1d (baseline for 1d runs) | 0.22 | −71% | €8,112 |
+| MA-cross 20/50 1h, v1 risk rules (6-bar time exit) | −10.1 | −100% | €0.11 |
+| MA-cross 20/50 1h, signal-only exits | −0.59 | −70% | €3,330 |
+| Structure trend k=3 1h, signal-only exits (H4) | −2.45 | −99.8% | €34 |
+| **TSMOM 90d 1d, long/short, signal-only exits (H5)** | **0.33** | −53% | **€12,391** |
 
 Note the Slice 0 baseline (Sharpe 0.42, €14,482) is superseded: the engine now
 fills at next-bar open and charges funding, both of which buy-and-hold on a
@@ -191,17 +225,14 @@ history is needed for model development, consider Kraken spot XBT/USD as a
 supplementary training corpus — resolved 4 Jul 2026: not needed (see
 decision log).
 
-**Next step:** still the Slice 3 decision point, now sharper. Iterations
-1–3 of H2 are rejected; **two remain**. Iteration 3 (4h) was the test of
-the cost-per-decision diagnosis and it failed it: fewer, larger decisions
-lost *more*, so cost mitigation alone is not the answer. The evidence now
-points at the mapping's directional asymmetry — a long-only conversion of
-a ranking signal (IC measures ranking, not long-side profitability).
-Iteration 4 candidates consistent with that: a symmetric short side, or
-confidence-scaled sizing (needs fractional-position engine support) — or
-fold the hypothesis and spend the effort on a new one. Slice 5 is built
-and waiting: the moment a candidate passes, promote it and the ≥4-week
-paper clock starts.
+**Next step:** H5 is the first candidate to pass a pre-registered gate,
+and its only remaining OOS test is paper trading. The work that unlocks
+it: (1) 1d-tick support in the live runner (today hard-cron'd hourly) and
+(2) a `ts_momentum` kind in the strategy-config factory — then promote
+and the ≥4-week paper clock starts. Standing obligation: run
+`scripts/backfill_funding.py` at least monthly (rolling-year API window);
+H6 evaluation opens ≈ Jul 2027. H2 is folded; new ML work should redesign
+the label before touching the model.
 
 **Running the stack (Slice 4):**
 
@@ -210,6 +241,7 @@ docker compose up -d                                  # Postgres 17 (repo root)
 cd backend
 uv run alembic upgrade head                           # create/upgrade schema
 uv run python scripts/backtest.py --strategy buy_and_hold --save
+uv run python scripts/backfill_funding.py             # run at least monthly! (rolling-year API window)
 uv run python scripts/walkforward.py                  # honest eval (Slice 3), dev data only
 uv run uvicorn tradingbot.api.app:app --reload        # API on :8000
 uv run python -m tradingbot.live.runner               # paper bot (Slice 5), ticks hourly

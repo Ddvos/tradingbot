@@ -75,6 +75,7 @@ TRIAL_SHARPES_ANNUALIZED: dict[str, float] = {
     "structure_trend_k3": -2.45,
     "ml_xgb_v1_hysteresis": -1.93,
     "ml_xgb_v1_4h_hysteresis": -2.27,
+    "tsmom_90d_1d": 0.33,
 }
 """Every strategy candidate evaluated against the development data so far,
 with its annualized Sharpe (ROADMAP.md → The honest numbers). This is the

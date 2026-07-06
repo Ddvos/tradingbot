@@ -4,7 +4,12 @@ from datetime import UTC, datetime
 import httpx
 
 from tradingbot.adapters.kraken.provider import BASE_URL, KrakenProvider
-from tradingbot.core.ports.market_data import OHLCV_SCHEMA, validate_ohlcv
+from tradingbot.core.ports.market_data import (
+    FUNDING_SCHEMA,
+    OHLCV_SCHEMA,
+    validate_funding,
+    validate_ohlcv,
+)
 
 HOUR_MS = 3_600_000
 T0 = int(datetime(2024, 1, 1, tzinfo=UTC).timestamp()) * 1000
@@ -80,3 +85,37 @@ def test_still_forming_candle_is_dropped() -> None:
 
     assert df.get_column("close").to_list() == [100.0, 101.0]
     validate_ohlcv(df)
+
+
+def test_fetch_funding_rates_parses_and_sorts() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["symbol"] == "PF_XBTUSD"
+        body = {
+            "result": "success",
+            "serverTime": "2026-07-06T20:00:00Z",
+            "rates": [  # deliberately out of order: the adapter must sort
+                {
+                    "timestamp": "2025-07-02T09:00:00Z",
+                    "fundingRate": 0.40,
+                    "relativeFundingRate": 3.7e-6,
+                },
+                {
+                    "timestamp": "2025-07-02T08:00:00Z",
+                    "fundingRate": 0.66,
+                    "relativeFundingRate": 6.2e-6,
+                },
+            ],
+        }
+        return httpx.Response(200, content=json.dumps(body))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url=BASE_URL)
+    df = KrakenProvider(client=client).fetch_funding_rates("PF_XBTUSD")
+
+    assert df.schema == FUNDING_SCHEMA
+    validate_funding(df)
+    assert df.get_column("timestamp").to_list() == [
+        datetime(2025, 7, 2, 8, tzinfo=UTC),
+        datetime(2025, 7, 2, 9, tzinfo=UTC),
+    ]
+    assert df.get_column("relative_rate").to_list() == [6.2e-6, 3.7e-6]
+    assert df.get_column("absolute_rate").to_list() == [0.66, 0.40]

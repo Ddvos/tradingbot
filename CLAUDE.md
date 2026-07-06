@@ -252,9 +252,25 @@ Use Kraken's own naming — don't rename:
 - Timeframe: `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `12h`, `1d`, `1w` → becomes
   a `Literal` type for type safety
 
+### Funding rates (implemented 6 Jul 2026)
+
+```
+backend/data/raw/funding/{symbol}.parquet
+```
+
+One file per symbol, the full archive. Schema: `timestamp`
+(`Datetime("ms", "UTC")`, one row per hourly settlement), `relative_rate`
+(`Float64`, dimensionless per-hour rate on notional — longs pay positive,
+shorts receive), `absolute_rate` (`Float64`, Kraken's quote-currency
+equivalent). Same invariants and idempotent-upsert semantics as OHLCV
+(`FundingStore`).
+
+**This archive is the system of record, not a cache:** Kraken's API
+serves only the trailing ~12 months. Run
+`scripts/backfill_funding.py` at least monthly or history is lost.
+
 ### Future data types (not yet implemented)
 
-- `data/raw/funding/{symbol}.parquet` — funding rates for perpetuals
 - `data/raw/trades/{symbol}.parquet` — tick-level trades (only if needed)
 - `data/processed/features/{symbol}/{timeframe}.parquet` — engineered features
 

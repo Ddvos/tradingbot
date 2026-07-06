@@ -19,16 +19,19 @@ from datetime import UTC, datetime
 
 import httpx
 import polars as pl
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tradingbot.core.ports.market_data import (
+    FUNDING_SCHEMA,
     OHLCV_SCHEMA,
     TIMEFRAME_SECONDS,
     Timeframe,
+    validate_funding,
     validate_ohlcv,
 )
 
 BASE_URL = "https://futures.kraken.com/api/charts/v1"
+FUNDING_URL = "https://futures.kraken.com/derivatives/api/v4/historicalfundingrates"
 
 
 class _Candle(BaseModel):
@@ -43,6 +46,16 @@ class _Candle(BaseModel):
 class _ChartsResponse(BaseModel):
     candles: list[_Candle]
     more_candles: bool
+
+
+class _FundingRate(BaseModel):
+    timestamp: datetime
+    absolute_rate: float = Field(alias="fundingRate")
+    relative_rate: float = Field(alias="relativeFundingRate")
+
+
+class _FundingResponse(BaseModel):
+    rates: list[_FundingRate]
 
 
 class KrakenProvider:
@@ -98,3 +111,28 @@ class KrakenProvider:
         )
         response.raise_for_status()
         return _ChartsResponse.model_validate_json(response.content)
+
+    def fetch_funding_rates(self, symbol: str) -> pl.DataFrame:
+        """Hourly funding-rate settlements, satisfying validate_funding.
+
+        The endpoint serves only the trailing ~12 months and offers no
+        pagination (verified 6 Jul 2026) — persist the result regularly
+        (scripts/backfill_funding.py), or older history is lost for good.
+        """
+        response = self._client.get(FUNDING_URL, params={"symbol": symbol})
+        response.raise_for_status()
+        payload = _FundingResponse.model_validate_json(response.content)
+        df = (
+            pl.DataFrame(
+                {
+                    "timestamp": [r.timestamp for r in payload.rates],
+                    "relative_rate": [r.relative_rate for r in payload.rates],
+                    "absolute_rate": [r.absolute_rate for r in payload.rates],
+                },
+                schema=FUNDING_SCHEMA,
+            )
+            .unique(subset="timestamp", keep="last")
+            .sort("timestamp")
+        )
+        validate_funding(df)
+        return df
