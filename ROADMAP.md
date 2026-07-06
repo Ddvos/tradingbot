@@ -18,7 +18,7 @@
 
 ---
 
-## Current status — 2026-07-05
+## Current status — 2026-07-06
 
 **Phase:** Slices 0–5 built. Slice 3 (honest validation) closed the gate it
 guarded, with a split verdict: **the xgb_v1 signal survives out-of-sample;
@@ -130,6 +130,22 @@ IC unchanged at 0.218. Pattern across all candidates so far: a real but
 small edge loses to 1h taker costs under every mapping tried. 154 tests
 total. Two of five H2 iterations spent.
 
+**H2 iteration 3 — 4h decision timeframe (6 Jul 2026): rejected.** Same
+hysteresis mapping, decisions moved to 4h bars (pre-registered in
+`HYPOTHESES.md`; 4h data backfilled, same 2022-03 depth as 1h). The
+pipeline became timeframe-aware for this: funding per bar now scales with
+bar duration (`funding_rate_for`, ~11%/yr on every timeframe), Sharpe
+annualization derives from the timeframe (`periods_per_year`), bootstrap
+blocks stay one calendar day, and `scripts/walkforward.py` carries
+per-timeframe split geometry (4h: train 4,380 / test 540 / purge 6 /
+embargo 24 bars — same calendar windows as 1h). The 1h path is unchanged,
+so iterations 1–2 stay comparable. Result: OOS Sharpe **−2.27** (CI
+[−3.94, −0.57]), 152 trades, PF 0.55 vs buy-and-hold 0.69 — fewer, larger
+decisions made the economics *worse*, weakening the cost-per-decision
+diagnosis. IC held at 0.188 (above the pre-registered 0.10 floor). The
+failure mode is the long-only regime conversion itself. 167 tests total.
+Three of five H2 iterations spent.
+
 **Hypothesis H4 — structure trend-following (5 Jul 2026):** pure price
 action, long/short: higher highs + higher lows → long, the mirror → short,
 position flips only on a fully confirmed opposite structure (k=3 swings
@@ -175,20 +191,17 @@ history is needed for model development, consider Kraken spot XBT/USD as a
 supplementary training corpus — resolved 4 Jul 2026: not needed (see
 decision log).
 
-**Next step:** the Slice 3 decision point. MLStrategy(xgb_v1, 0.6) is
-rejected, but the OOS IC says the underlying signal survives honest
-validation — so the hypothesis is not dead, and the iteration budget
-applies (max 5 per hypothesis; threshold/mapping changes count as
-iterations and must be re-validated through the same walk-forward). Decide:
-iterate on the prediction→position mapping, or fold the hypothesis. The
-feature axis was explored on 5 Jul (H3, null result), a pure price-action
-trend strategy was rejected the same day (H4, Sharpe −2.45), and mapping
-iteration 2 (hysteresis regime) was rejected as well (−1.93) — three H2
-iterations remain. The evidence points at cost-per-decision, not signal
-quality: iteration 3 candidates are confidence-scaled *sizing* (needs
-fractional-position engine support) or a 4h decision timeframe. Slice 5 is
-built and waiting: the moment a candidate passes, promote it and the
-≥4-week paper clock starts.
+**Next step:** still the Slice 3 decision point, now sharper. Iterations
+1–3 of H2 are rejected; **two remain**. Iteration 3 (4h) was the test of
+the cost-per-decision diagnosis and it failed it: fewer, larger decisions
+lost *more*, so cost mitigation alone is not the answer. The evidence now
+points at the mapping's directional asymmetry — a long-only conversion of
+a ranking signal (IC measures ranking, not long-side profitability).
+Iteration 4 candidates consistent with that: a symmetric short side, or
+confidence-scaled sizing (needs fractional-position engine support) — or
+fold the hypothesis and spend the effort on a new one. Slice 5 is built
+and waiting: the moment a candidate passes, promote it and the ≥4-week
+paper clock starts.
 
 **Running the stack (Slice 4):**
 

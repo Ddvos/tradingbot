@@ -6,8 +6,18 @@ import polars as pl
 import pytest
 
 from tradingbot.adapters.simulated.executor import SimulatedExecutor
-from tradingbot.core.backtest.engine import BacktestEngine, ExitReason, TradeRules
+from tradingbot.core.backtest.engine import BacktestEngine, ExitReason, TradeRules, funding_rate_for
 from tradingbot.core.ports.market_data import OHLCV_SCHEMA
+
+
+def test_funding_scales_with_bar_duration() -> None:
+    # ~11%/yr flat funding regardless of timeframe: the 4h bar carries the
+    # full 0.005% interval charge, the 1h bar a quarter of it.
+    assert funding_rate_for("1h") == Decimal("0.0000125")
+    assert funding_rate_for("4h") == Decimal("0.00005")
+    assert funding_rate_for("4h") == 4 * funding_rate_for("1h")
+    assert TradeRules().funding_rate_per_bar == funding_rate_for("1h")
+
 
 NO_RULES = TradeRules(
     risk_pct=None,

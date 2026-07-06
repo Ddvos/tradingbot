@@ -15,7 +15,7 @@ protocol lives in HOLDOUT.md at the repo root.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -35,8 +35,14 @@ from tradingbot.application.run_backtest import (
     TAKER_FEE_RATE,
     trades_frame,
 )
-from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, Trade, TradeRules
-from tradingbot.core.backtest.metrics import max_drawdown, sharpe_ratio
+from tradingbot.core.backtest.engine import (
+    BacktestEngine,
+    BacktestResult,
+    Trade,
+    TradeRules,
+    funding_rate_for,
+)
+from tradingbot.core.backtest.metrics import max_drawdown, periods_per_year, sharpe_ratio
 from tradingbot.core.models.dataset import FEATURE_COLUMNS, build_dataset
 from tradingbot.core.models.evaluation import (
     bootstrap_sharpe_ci,
@@ -68,6 +74,7 @@ TRIAL_SHARPES_ANNUALIZED: dict[str, float] = {
     "ml_xgb_v2_structure_features_threshold_0.6": -2.12,
     "structure_trend_k3": -2.45,
     "ml_xgb_v1_hysteresis": -1.93,
+    "ml_xgb_v1_4h_hysteresis": -2.27,
 }
 """Every strategy candidate evaluated against the development data so far,
 with its annualized Sharpe (ROADMAP.md → The honest numbers). This is the
@@ -77,7 +84,7 @@ rules (-10.1) is deliberately absent — it is the same hypothesis as the
 trend-exit variant under mismatched exit mechanics (ROADMAP finding #2),
 a diagnostic, not an independent candidate."""
 
-SECONDS_PER_YEAR = 365 * 24 * 3600
+SECONDS_PER_DAY = 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -146,6 +153,9 @@ class WalkForwardReport:
     probabilistic_sharpe: float
     deflated_sharpe: float
     sharpe_ci: tuple[float, float]
+    bootstrap_block_bars: int
+    """Block size of the Sharpe-CI bootstrap: one day of bars, whatever the
+    timeframe (calendar parity across runs)."""
     n_trades: int
     win_rate: float
     profit_factor: float
@@ -156,18 +166,16 @@ class WalkForwardReport:
     trial_sharpes_annualized: dict[str, float]
 
 
-def _periods_per_year(timeframe: Timeframe) -> int:
-    return SECONDS_PER_YEAR // TIMEFRAME_SECONDS[timeframe]
-
-
 def _map_probabilities(
     probabilities: list[float],
     train_labels: npt.NDArray[np.int8],
     mapping: Mapping,
     threshold: float,
+    timeframe: Timeframe,
 ) -> tuple[list[str], TradeRules]:
     """One fold's OOS probabilities → signals plus the exit rules that match
-    the mapping's holding horizon (ROADMAP finding #2)."""
+    the mapping's holding horizon (ROADMAP finding #2), with funding scaled
+    to the bar duration."""
     if mapping == "hysteresis":
         base_rate = float(train_labels.mean())
         signals = hysteresis_signals(
@@ -175,9 +183,13 @@ def _map_probabilities(
             enter_at=HYSTERESIS_ENTER_MULTIPLE * base_rate,
             exit_at=HYSTERESIS_EXIT_MULTIPLE * base_rate,
         )
-        return signals, HOLD_RULES  # regime mapping: the signal is the only exit
-    signals = [Signal.LONG.value if p >= threshold else Signal.FLAT.value for p in probabilities]
-    return signals, ML_TRADE_RULES
+        rules = HOLD_RULES  # regime mapping: the signal is the only exit
+    else:
+        signals = [
+            Signal.LONG.value if p >= threshold else Signal.FLAT.value for p in probabilities
+        ]
+        rules = ML_TRADE_RULES
+    return signals, replace(rules, funding_rate_per_bar=funding_rate_for(timeframe))
 
 
 def _run_engine(
@@ -230,6 +242,7 @@ def run_walk_forward(
     folds = walk_forward_folds(dataset.height, config)
     warmup = ML_TRADE_RULES.atr_period + 1  # bars the engine needs before its ATR is defined
     dev_timestamps = dev.get_column("timestamp")
+    baseline_rules = replace(HOLD_RULES, funding_rate_per_bar=funding_rate_for(timeframe))
 
     fold_results: list[FoldResult] = []
     fold_curves: list[pl.DataFrame] = []
@@ -261,7 +274,9 @@ def run_walk_forward(
         if engine_slice[warmup, "timestamp"] != test[0, "timestamp"]:
             raise ValueError(f"Fold {fold.index}: dataset rows do not align with OHLCV bars")
 
-        test_signals, rules = _map_probabilities(probabilities, train_labels, mapping, threshold)
+        test_signals, rules = _map_probabilities(
+            probabilities, train_labels, mapping, threshold, timeframe
+        )
         signal_values = [Signal.FLAT.value] * warmup + test_signals
         result = _run_engine(
             engine_slice,
@@ -276,7 +291,7 @@ def run_walk_forward(
         baseline = _run_engine(
             dev.slice(start_row, test.height),
             HoldStrategy(),
-            HOLD_RULES,
+            baseline_rules,
             symbol,
             initial_capital,
             fee_rate,
@@ -296,7 +311,7 @@ def run_walk_forward(
                     else float("nan")
                 ),
                 ic=information_coefficient(probabilities, labels),
-                sharpe=sharpe_ratio(equity, _periods_per_year(timeframe)),
+                sharpe=sharpe_ratio(equity, periods_per_year(timeframe)),
                 max_drawdown=max_drawdown(equity),
                 n_trades=len(result.trades),
                 win_rate=win_rate(pnls),
@@ -312,7 +327,8 @@ def run_walk_forward(
 
     oos_curve = _stitch(fold_curves, initial_capital)
     baseline_curve = _stitch(baseline_curves, initial_capital)
-    periods = _periods_per_year(timeframe)
+    periods = periods_per_year(timeframe)
+    block_bars = max(1, SECONDS_PER_DAY // TIMEFRAME_SECONDS[timeframe])
     equity_values = oos_curve.get_column("equity").to_numpy()
     returns: list[float] = (np.diff(equity_values) / equity_values[:-1]).tolist()
 
@@ -346,7 +362,8 @@ def run_walk_forward(
         ),
         probabilistic_sharpe=probabilistic_sharpe_ratio(returns),
         deflated_sharpe=deflated_sharpe_ratio(returns, trial_sharpes),
-        sharpe_ci=bootstrap_sharpe_ci(returns, periods),
+        sharpe_ci=bootstrap_sharpe_ci(returns, periods, block_bars=block_bars),
+        bootstrap_block_bars=block_bars,
         n_trades=len(pooled_pnls),
         win_rate=win_rate(pooled_pnls),
         profit_factor=profit_factor(pooled_pnls),

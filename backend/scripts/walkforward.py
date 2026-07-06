@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import math
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -31,6 +32,20 @@ BACKEND_DIR = Path(__file__).parent.parent
 DEFAULT_DATA_DIR = BACKEND_DIR / "data" / "raw" / "ohlcv"
 DEFAULT_OUT_DIR = BACKEND_DIR / "data" / "processed" / "walkforward"
 
+WALK_FORWARD_GEOMETRY: dict[str, WalkForwardConfig] = {
+    "1h": WalkForwardConfig(),
+    "4h": WalkForwardConfig(
+        train_bars=4_380,  # same calendar windows as 1h: 2y train,
+        test_bars=540,  # 90d test,
+        purge_bars=6,  # purge = the 6-bar label horizon,
+        embargo_bars=24,  # embargo kept at 24 BARS (96h — conservative),
+        min_test_bars=180,  # 30d minimum (HYPOTHESES.md → H2 iteration 3)
+    ),
+}
+"""Split geometry per timeframe. Bar counts are experiment parameters fixed
+in the pre-registration, not derivable math — other timeframes must pass
+all --*-bars flags explicitly."""
+
 
 class _Args(argparse.Namespace):
     symbol: str
@@ -39,11 +54,11 @@ class _Args(argparse.Namespace):
     capital: Decimal
     threshold: float
     mapping: str
-    train_bars: int
-    test_bars: int
-    purge_bars: int
-    embargo_bars: int
-    min_test_bars: int
+    train_bars: int | None
+    test_bars: int | None
+    purge_bars: int | None
+    embargo_bars: int | None
+    min_test_bars: int | None
     data_dir: Path
     out_dir: Path
 
@@ -108,7 +123,8 @@ def render_markdown(report: WalkForwardReport, run_stamp: str) -> str:
         f"- **Deflated Sharpe** (vs {len(report.trial_sharpes_annualized)} trials):"
         f" {_fmt(report.deflated_sharpe, 3)}",
         f"- Bootstrap 95% CI for the annualized Sharpe:"
-        f" [{_fmt(ci_low)}, {_fmt(ci_high)}] (block bootstrap, 24-bar blocks)",
+        f" [{_fmt(ci_low)}, {_fmt(ci_high)}]"
+        f" (block bootstrap, {report.bootstrap_block_bars}-bar blocks)",
         f"- Pooled IC: {_fmt(report.oos_ic, 4)} | pooled AUC: {_fmt(report.oos_auc, 3)}",
         f"- Trades: {report.n_trades} | win rate: {_fmt(report.win_rate, 3)}"
         f" | profit factor: {_fmt(report.profit_factor)}",
@@ -158,23 +174,34 @@ def main() -> None:
         choices=["threshold", "hysteresis"],
         help="probability->position mapping; hysteresis = H2 iteration 2 (HYPOTHESES.md)",
     )
-    parser.add_argument("--train-bars", type=int, default=WalkForwardConfig.train_bars)
-    parser.add_argument("--test-bars", type=int, default=WalkForwardConfig.test_bars)
-    parser.add_argument("--purge-bars", type=int, default=WalkForwardConfig.purge_bars)
-    parser.add_argument("--embargo-bars", type=int, default=WalkForwardConfig.embargo_bars)
-    parser.add_argument("--min-test-bars", type=int, default=WalkForwardConfig.min_test_bars)
+    parser.add_argument("--train-bars", type=int, default=None)
+    parser.add_argument("--test-bars", type=int, default=None)
+    parser.add_argument("--purge-bars", type=int, default=None)
+    parser.add_argument("--embargo-bars", type=int, default=None)
+    parser.add_argument("--min-test-bars", type=int, default=None)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     args = parser.parse_args(namespace=_Args())
     timeframe = cast(Timeframe, args.timeframe)  # narrowed by argparse choices
 
-    config = WalkForwardConfig(
-        train_bars=args.train_bars,
-        test_bars=args.test_bars,
-        purge_bars=args.purge_bars,
-        embargo_bars=args.embargo_bars,
-        min_test_bars=args.min_test_bars,
+    geometry_flags = (
+        ("train_bars", args.train_bars),
+        ("test_bars", args.test_bars),
+        ("purge_bars", args.purge_bars),
+        ("embargo_bars", args.embargo_bars),
+        ("min_test_bars", args.min_test_bars),
     )
+    overrides = {name: value for name, value in geometry_flags if value is not None}
+    base = WALK_FORWARD_GEOMETRY.get(timeframe)
+    if base is not None:
+        config = replace(base, **overrides)
+    elif len(overrides) == len(geometry_flags):
+        config = WalkForwardConfig(**overrides)
+    else:
+        parser.error(
+            f"no default walk-forward geometry for {timeframe}; "
+            "pass all --train/test/purge/embargo/min-test-bars flags"
+        )
     report = run_walk_forward(
         args.data_dir,
         args.symbol,

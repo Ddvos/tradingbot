@@ -25,7 +25,7 @@ numbers" and Findings 1–3.
 
 ---
 
-## H2 — ML triple-barrier momentum (xgb_v1) 🚧 open, iterations 1–2 of 5 spent, both rejected (5 Jul 2026)
+## H2 — ML triple-barrier momentum (xgb_v1) 🚧 open, iterations 1–3 of 5 spent, all rejected (6 Jul 2026)
 
 **Hypothesis:** short-horizon direction (hit +2.0×ATR before −1.5×ATR within
 6 bars) is partially predictable from 13 causal 1h features; a classifier's
@@ -108,6 +108,99 @@ Registered as trial `ml_xgb_v1_hysteresis` when read.
   timeframe up (4h labels/features, fewer decisions each worth more vs
   costs). Registered as trial `ml_xgb_v1_hysteresis` (−1.93). Three
   iterations remain.
+
+### Iteration 3 — 4h decision timeframe (pre-registered 6 Jul 2026)
+
+**Change (timeframe only — mapping, model, features, label shape
+unchanged):** decisions move from 1h to 4h bars, still PF_XBTUSD futures.
+Same 13 causal features computed on 4h bars; same triple-barrier labels
+(2.0×ATR target / 1.5×ATR stop / 6-bar time barrier — now a 24-hour
+horizon); same hysteresis mapping as iteration 2 (enter long at
+P ≥ 1.5× the fold's training base rate, stay while ≥ 1.0×, signal-only
+exits, `HOLD_RULES`).
+
+**Why this change (reasoned before running):**
+
+- The emerging pattern across H1–H4 and both H2 mappings names
+  cost-per-decision, not signal quality: a real edge (pooled OOS IC 0.218,
+  stable) is worth less per 1h decision than the ~0.3% round-trip cost.
+- On 4h bars each decision spans 4× the time. Volatility grows roughly
+  with √time, so the typical move per decision (and the ATR-scaled
+  barriers) roughly doubles while the round-trip cost stays fixed — edge
+  per decision vs cost improves ~2×, and decision count falls ~4×.
+- Iteration 2's mapping is kept byte-identical so iterations 2 and 3
+  differ only in the clock: if 4h materially improves on −1.93, the
+  cost-per-decision diagnosis is confirmed; if not, this signal likely
+  cannot clear retail costs at any of these speeds.
+
+**Specification (all fixed a priori):**
+
+- Data: PF_XBTUSD 4h (Kraken charts API serves 2022-03-23 onward, same
+  as 1h — 9,398 bars backfilled 6 Jul 2026). Same evaluation window as
+  iterations 1–2: clamped to `H2_EVAL_END` 2025-07-01 for comparability.
+- Feature/label windows are **bar-parameterized by design** (as the 1h
+  set was defined): ATR(14) = 14 four-hour bars, the 6-bar label horizon
+  = 24h. No calendar-matching of window lengths — that would be a new
+  feature set, i.e. a different hypothesis.
+- Walk-forward geometry, same calendar durations as iterations 1–2:
+  train 4,380 bars (2y) / test 540 bars (90d) / purge 6 (= label
+  horizon) / min test 180 bars (30d) / embargo **24 bars** (96h —
+  bar-count parity with the 1h runs, deliberately more conservative in
+  calendar time). Fresh model per fold, same fixed XGBoost
+  hyperparameters.
+- Costs: same pessimistic assumptions — 0.05% taker, 0.1% slippage, and
+  the same ~11%/yr flat funding, charged per bar **scaled to bar
+  duration** (0.00005 per 4h bar; the 1h engine charged 0.0000125 per 1h
+  bar). Bootstrap CI keeps one-day blocks (6 bars on 4h) — calendar
+  parity with iterations 1–2.
+- Known risk, accepted: each fold trains on 4,380 samples instead of
+  17,520 — a weaker model is possible. IC/AUC are therefore reported per
+  fold; if the 4h signal itself collapses (pooled OOS IC < 0.10) the
+  iteration is rejected on signal grounds, distinct from the cost
+  question.
+
+**Protocol:** identical walk-forward machinery, run
+`uv run python scripts/walkforward.py --name xgb_v1_4h_hysteresis --timeframe 4h --mapping hysteresis`.
+Registered as trial `ml_xgb_v1_4h_hysteresis` when read.
+
+**Success criteria (pre-registered, identical to iteration 2):**
+
+- **Pass** (→ holdout consideration per the development cycle): OOS
+  Sharpe > buy-and-hold over the same test windows **and** profit factor
+  > 1.0 **and** ≥ 30 trades.
+- **Progress, iterate again**: 0 < OOS Sharpe ≤ buy-and-hold —
+  pre-register iteration 4 first.
+- **Reject the iteration**: OOS Sharpe ≤ 0 (or the IC-collapse clause
+  above). Three of five H2 iterations then spent.
+
+**Result — rejected, 6 Jul 2026.** Run `4h_xgb_v1_4h_hysteresis_20260706_200940`:
+
+- OOS Sharpe **−2.27** (criterion: > 0 to survive; buy-and-hold did 0.69
+  on the same windows). Bootstrap 95% CI [−3.94, −0.57] — solidly
+  negative. Final equity 10,000 → 4,513, max DD −56.4%. Deflated Sharpe
+  0.000.
+- The timeframe did what it promised *mechanically*: 152 trades (vs 360
+  at 1h), each decision spanning 4× the time. The economics got **worse**,
+  not better: profit factor 0.55 vs 0.77 at 1h, win rate 0.375.
+- The signal weakened on 4h but did not collapse: pooled OOS IC 0.188
+  (1h: 0.218; the pre-registered floor was 0.10), AUC 0.636, per-fold IC
+  0.123–0.267. The quarter-sized training windows (4,380 samples) are the
+  likely cause — the risk the spec accepted.
+- **This result weakens the cost-per-decision diagnosis.** If round-trip
+  costs were the binding constraint, fewer and larger decisions should
+  have helped; they hurt instead. The loss concentrates where iteration
+  2's did: a long-only regime riding elevated P through periods where the
+  model kept disagreeing with realized direction (fold 0, 2024-04→07:
+  Sharpe −4.71, PF 0.20). The one mildly positive fold is again
+  2025-03→06 (Sharpe 0.12, PF 1.03).
+- Registered as trial `ml_xgb_v1_4h_hysteresis` (−2.27). **Three of five
+  H2 iterations spent.** If iteration 4 is proposed, the evidence now
+  points away from further cost mitigation and toward the mapping's
+  directional asymmetry — a long-only conversion of a ranking signal
+  whose IC measures ranking, not long-side profitability. Candidates
+  consistent with this evidence: a symmetric short side, or
+  confidence-scaled sizing (needs fractional-position engine support).
+  Pre-registered first, as always.
 
 ---
 

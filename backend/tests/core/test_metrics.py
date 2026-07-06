@@ -4,7 +4,18 @@ import statistics
 import polars as pl
 import pytest
 
-from tradingbot.core.backtest.metrics import PERIODS_PER_YEAR_1H, max_drawdown, sharpe_ratio
+from tradingbot.core.backtest.metrics import (
+    PERIODS_PER_YEAR_1H,
+    max_drawdown,
+    periods_per_year,
+    sharpe_ratio,
+)
+
+
+def test_periods_per_year_by_timeframe() -> None:
+    assert periods_per_year("1h") == 24 * 365
+    assert periods_per_year("4h") == 6 * 365
+    assert periods_per_year("1h") == PERIODS_PER_YEAR_1H
 
 
 def test_sharpe_matches_manual_computation() -> None:

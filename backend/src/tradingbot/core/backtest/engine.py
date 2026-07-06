@@ -24,10 +24,25 @@ import polars as pl
 
 from tradingbot.core.features.indicators import atr
 from tradingbot.core.ports.executor import Fill, OrderExecutor, OrderRequest, Side
-from tradingbot.core.ports.market_data import validate_ohlcv
+from tradingbot.core.ports.market_data import TIMEFRAME_SECONDS, Timeframe, validate_ohlcv
 from tradingbot.core.risk.sizing import all_in_size, position_size
 from tradingbot.core.signals.signal import direction
 from tradingbot.core.strategies.base import Strategy
+
+FUNDING_INTERVAL_RATE = Decimal("0.00005")
+"""Flat pessimistic funding: 0.005% per 4h Kraken funding interval (~11%/yr)."""
+
+FUNDING_INTERVAL_SECONDS = 4 * 3600
+
+
+def funding_rate_for(timeframe: Timeframe) -> Decimal:
+    """The flat funding charge for one bar of `timeframe`.
+
+    Funding accrues per unit of time, not per bar, so the per-bar charge
+    must scale with bar duration — 1h bars each carry a quarter of the 4h
+    interval rate, a 4h bar carries the full interval.
+    """
+    return FUNDING_INTERVAL_RATE * TIMEFRAME_SECONDS[timeframe] / FUNDING_INTERVAL_SECONDS
 
 
 class ExitReason(StrEnum):
@@ -43,8 +58,9 @@ class TradeRules:
 
     Calibrated for 1h bars. risk_pct sizing derives quantity from the stop
     distance, so risk_pct requires stop_atr; risk_pct=None means all-in
-    sizing (buy-and-hold). The default funding rate approximates 0.005% per
-    4h funding interval (~11%/year), deliberately pessimistic.
+    sizing (buy-and-hold). funding_rate_per_bar defaults to the 1h charge;
+    on any other timeframe pass funding_rate_for(timeframe), or funding is
+    silently mischarged.
     """
 
     atr_period: int = 14
@@ -52,7 +68,7 @@ class TradeRules:
     stop_atr: Decimal | None = Decimal("1.5")
     take_profit_atr: Decimal | None = Decimal("3.0")
     max_bars_held: int | None = 6
-    funding_rate_per_bar: Decimal = Decimal("0.0000125")
+    funding_rate_per_bar: Decimal = Decimal("0.0000125")  # = funding_rate_for("1h")
 
     def __post_init__(self) -> None:
         if self.risk_pct is not None and self.stop_atr is None:

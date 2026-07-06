@@ -5,7 +5,7 @@ deliberately pessimistic (taker fee, upper-bound slippage; see CLAUDE.md →
 Trading constraints).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -16,8 +16,14 @@ import polars as pl
 from tradingbot.adapters.parquet.store import ParquetStore
 from tradingbot.adapters.simulated.executor import SimulatedExecutor
 from tradingbot.application.holdout import clamp_to_development
-from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, Trade, TradeRules
-from tradingbot.core.backtest.metrics import PERIODS_PER_YEAR_1H, max_drawdown, sharpe_ratio
+from tradingbot.core.backtest.engine import (
+    BacktestEngine,
+    BacktestResult,
+    Trade,
+    TradeRules,
+    funding_rate_for,
+)
+from tradingbot.core.backtest.metrics import max_drawdown, periods_per_year, sharpe_ratio
 from tradingbot.core.ports.executor import Side
 from tradingbot.core.ports.market_data import Timeframe
 from tradingbot.core.ports.storage import BacktestRunId, BacktestRunRecord, ParamValue
@@ -54,6 +60,9 @@ def run_strategy(
     # holdout, not even at aggregate level (HOLDOUT.md, rule 4).
     ohlcv = clamp_to_development(ParquetStore(data_dir).read(symbol, timeframe))
 
+    # Funding is a market property, not a strategy choice: the per-bar
+    # charge follows the bar duration, whatever rules the caller passes.
+    rules = replace(rules, funding_rate_per_bar=funding_rate_for(timeframe))
     executor = SimulatedExecutor(fee_rate=fee_rate, slippage_rate=slippage_rate)
     engine = BacktestEngine(
         executor, strategy, initial_capital, rules, set_market=executor.set_market
@@ -63,7 +72,7 @@ def run_strategy(
     equity = result.equity_curve.get_column("equity")
     return BacktestReport(
         result=result,
-        sharpe=sharpe_ratio(equity, PERIODS_PER_YEAR_1H),
+        sharpe=sharpe_ratio(equity, periods_per_year(timeframe)),
         max_drawdown=max_drawdown(equity),
         num_bars=len(ohlcv),
     )

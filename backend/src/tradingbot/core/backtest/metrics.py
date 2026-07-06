@@ -8,7 +8,17 @@ import math
 
 import polars as pl
 
-PERIODS_PER_YEAR_1H = 24 * 365
+from tradingbot.core.ports.market_data import TIMEFRAME_SECONDS, Timeframe
+
+SECONDS_PER_YEAR = 365 * 24 * 3600
+
+
+def periods_per_year(timeframe: Timeframe) -> int:
+    """Bars per year for a 24/7 market — the Sharpe annualization base."""
+    return SECONDS_PER_YEAR // TIMEFRAME_SECONDS[timeframe]
+
+
+PERIODS_PER_YEAR_1H = periods_per_year("1h")
 
 MIN_RETURNS_FOR_SHARPE = 2
 
