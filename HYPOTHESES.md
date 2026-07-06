@@ -25,7 +25,7 @@ numbers" and Findings 1–3.
 
 ---
 
-## H2 — ML triple-barrier momentum (xgb_v1) 🚧 open, iteration 1 of 5 spent (4 Jul 2026)
+## H2 — ML triple-barrier momentum (xgb_v1) 🚧 open, iterations 1–2 of 5 spent, both rejected (5 Jul 2026)
 
 **Hypothesis:** short-horizon direction (hit +2.0×ATR before −1.5×ATR within
 6 bars) is partially predictable from 13 causal 1h features; a classifier's
@@ -42,6 +42,72 @@ prediction→position mapping, not the model's ranking skill. Report:
 iterations remain (each re-validated through the same walk-forward);
 candidate ideas: confidence-scaled sizing with a turnover buffer, lower
 threshold, symmetric short side.
+
+### Iteration 2 — hysteresis regime mapping (pre-registered 5 Jul 2026)
+
+**Change (mapping only — model, features, labels, folds, costs unchanged):**
+the binary threshold 0.6 with per-trade barriers becomes a *regime*: enter
+long when P ≥ **1.5×** the fold's training-window base rate; stay long
+while P ≥ **1.0×** base rate; flat below. Exits are the signal itself
+(`HOLD_RULES`: all-in, no ATR stop, no take-profit, no time exit).
+
+**Why this mapping (reasoned before running):**
+
+- Iteration 1 failed on trade count: with base rate ~0.18 the model almost
+  never reaches an absolute 0.6, so the bar must key off the base rate the
+  model was trained against, not a fixed number.
+- Every strategy so far died of cost churn. The two-bar hysteresis gap is a
+  turnover buffer: a P hovering around a single threshold flips positions
+  every wobble; enter-high/exit-low merges consecutive warm bars into one
+  held position, amortizing entry costs over many bars.
+- Per-trade barriers cap winners and force exit/re-enter cycles (ROADMAP
+  finding #2 applied to ML: iteration 1's own exits). A regime mapping
+  holds exactly as long as the model keeps seeing better-than-base odds.
+- Multipliers 1.5/1.0 are fixed a priori: enter on meaningfully
+  better-than-base odds, leave when the advantage is gone. Not scanned;
+  changing them later is a new pre-registered iteration.
+
+**Protocol:** identical walk-forward (5 folds, purge/embargo, pessimistic
+costs), same evaluation window as iteration 1 (`H2_EVAL_END` 2025-07-01)
+for comparability. Run:
+`uv run python scripts/walkforward.py --name xgb_v1_hysteresis --mapping hysteresis`.
+Registered as trial `ml_xgb_v1_hysteresis` when read.
+
+**Success criteria (pre-registered):**
+
+- **Pass** (→ holdout consideration per the development cycle): OOS Sharpe
+  > buy-and-hold over the same test windows **and** profit factor > 1.0
+  **and** ≥ 30 trades.
+- **Progress, iterate again**: 0 < OOS Sharpe ≤ buy-and-hold — the mapping
+  direction works but not enough; iteration 3 may refine it (pre-registered
+  first).
+- **Reject the iteration**: OOS Sharpe ≤ 0. Two of five H2 iterations then
+  spent.
+
+**Result — rejected, 5 Jul 2026.** Run `1h_xgb_v1_hysteresis_20260705_203817`:
+
+- OOS Sharpe **−1.93** (criterion: > 0 to survive; buy-and-hold did 0.67 on
+  the same windows). Bootstrap 95% CI [−3.66, −0.22] — solidly negative,
+  not small-sample noise. Final equity 10,000 → 4,707, max DD −58.5%.
+- The mapping did what it was designed to do: 360 trades (vs iteration 1's
+  4), win rate 0.392, positions held while the signal stayed warm. The
+  economics still lose: profit factor 0.77 — average losers outweigh
+  average winners under signal-only exits, and ~0.3% round-trip costs on
+  360 trades compound on top.
+- The signal itself is unchanged and intact (pooled IC 0.218, AUC 0.664 —
+  identical to iteration 1, as expected since only the mapping changed).
+  One fold (2025-03→06) was mildly positive (Sharpe 0.55, PF 1.09); fold
+  2024-09→12 was disastrous (−5.83) — the regime rode long through a
+  period where elevated P kept disagreeing with realized direction.
+- **Emerging pattern across H1–H4 and both H2 mappings:** a real but small
+  edge (IC 0.22) appears to be worth less than 1h taker costs + slippage
+  under every prediction→position mapping tried. Iteration 3 candidates
+  that respond to *this* diagnosis rather than re-rolling the dice:
+  confidence-scaled position *sizing* (small positions at moderate P —
+  needs engine support for fractional positions), or moving the decision
+  timeframe up (4h labels/features, fewer decisions each worth more vs
+  costs). Registered as trial `ml_xgb_v1_hysteresis` (−1.93). Three
+  iterations remain.
 
 ---
 
@@ -142,3 +208,94 @@ Run `1h_xgb_v2_20260704_221613` (report under
   from `feature_expressions()` per this verdict. H3 budget: iteration 1 of 5
   spent; remaining pre-registered candidates if someone wants iteration 2:
   multi-timeframe (4H) structure, touch-count levels.
+
+---
+
+## H4 — Structure trend-following (pure price action, long/short) ❌ rejected (5 Jul 2026)
+
+### Hypothesis
+
+Trend *is* market structure: discretionary traders define an uptrend as
+higher highs plus higher lows and a downtrend as the mirror image, and they
+position accordingly — so once a structure reversal is *confirmed*, the new
+trend attracts follow-on order flow and persists long enough to trade. No
+indicators; entries and exits come only from confirmed swing structure.
+
+Prior evidence is respected, not hidden: H1 rejected 1h trend persistence
+under an MA(20/50) definition (cost churn beat a real but small edge, PF
+0.85 at 447 flips), and H3 found swing structure adds little *6-bar*
+predictive information. H4 differs on both counts — a structure-based trend
+definition instead of an arbitrary MA pair, symmetric shorts, and far fewer
+position flips (a flip needs a full confirmed reversal of both swing
+series). That is the specific gap this hypothesis claims matters. The prior
+is low; the test is cheap; the criteria below are binding either way.
+
+### Specification (all fixed a priori — no tuning against results)
+
+Swing detection: the H3 fractal, unchanged — `core/features/structure.py`,
+half-width **k = 3**, confirmation lag k bars (the no-lookahead rule). Same
+value as H3, chosen there a priori; reusing it is deliberate — picking a new
+k now would be a degree of freedom.
+
+Signal per bar (causal, from confirmed swings only):
+
+- last two confirmed swing highs rising **and** last two confirmed swing
+  lows rising → **LONG**
+- last two confirmed swing highs not rising **and** last two confirmed
+  swing lows not rising → **SHORT**
+- structure mixed (series disagree, or fewer than two swings each) → carry
+  the previous signal; **FLAT** until the first full structure confirms
+
+So the position flips only on a fully confirmed opposite structure —
+"wait for the reversal to confirm, then follow the trend."
+
+Execution and costs, matched to the thesis (H1 finding #2 — exits must fit
+the signal's horizon): signal-only exits, all-in sizing, no ATR stop, no
+take-profit, no time exit (`HOLD_RULES`, exactly as ma_cross_trend); the
+standard pessimistic costs (0.05% taker, 0.1% slippage, flat funding both
+directions).
+
+### Protocol
+
+- One backtest over the development window (clamped automatically to
+  `HOLDOUT_START` 2026-07-04 by `run_backtest.py`; the holdout is currently
+  regrowing, so the dev window is the full present history 2022-03 →
+  2026-07-02): `uv run python scripts/backtest.py --strategy structure_trend --save`.
+- The candidate is appended to `TRIAL_SHARPES_ANNUALIZED` when the run is
+  read, as `structure_trend_k3`.
+- Comparison baseline: buy-and-hold over the same window — annualized
+  Sharpe **0.21**, max DD −71% (ROADMAP.md → The honest numbers).
+
+### Success criteria (pre-registered)
+
+- **Pass** (→ candidate for paper trading per the development cycle) if
+  annualized Sharpe > 0.21 (buy-and-hold) **and** profit factor > 1.0
+  **and** ≥ 30 trades (fewer means the number is luck, not evidence).
+- **Reject** otherwise. Iterations (≤ 5 total for H4, each pre-registered
+  first) may vary the *rules* — e.g. 4h timeframe where trend-per-cost is
+  more favorable — but never scan k or add filters chosen by looking at
+  which would have worked.
+
+### Result — rejected, 5 Jul 2026
+
+Run `476d22db` (saved to the dashboard; equity curve
+`data/processed/equity/PF_XBTUSD/1h_structure_trend.parquet`), development
+window 2022-03-23 → 2026-07-02, 37,499 bars:
+
+- Annualized Sharpe **−2.45** (criterion: > 0.21) — fail.
+- Profit factor **0.83** (criterion: > 1.0) — fail.
+- 1,388 trades (criterion ≥ 30 — met, abundantly), win rate 30.8%,
+  final equity 10,000 → **34** (max drawdown −99.8%). All exits were signal
+  flips, so the matched-exit design worked as specified; the signal itself
+  loses.
+- **Why (diagnosis, not excuse):** k=3 swing structure on 1h bars reverses
+  constantly — 1,388 full structure flips in 4.3 years, *three times* the
+  churn of MA-cross(20/50)'s 447 crossings — and the edge per flip (PF 0.83)
+  is the same size as H1's (0.85). Same disease as H1, worse dose: at 1h
+  with retail costs, BTC trend persistence is too weak to pay for the flips,
+  under any of the two trend definitions tried so far.
+- Registered as trial `structure_trend_k3` (−2.45). H4 budget: iteration
+  1 of 5 spent. If anyone proposes iteration 2, the only version consistent
+  with this evidence is a *slower* structure — 4h bars (≈4× fewer flips) —
+  pre-registered first; k-scanning or entry filters chosen in hindsight
+  remain forbidden.

@@ -19,16 +19,23 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
+import numpy.typing as npt
 import polars as pl
 from sklearn.metrics import roc_auc_score
 
 from tradingbot.adapters.parquet.store import ParquetStore
 from tradingbot.adapters.simulated.executor import SimulatedExecutor
 from tradingbot.application.holdout import H2_EVAL_END, clamp_to_development
-from tradingbot.application.run_backtest import HOLD_RULES, SLIPPAGE_RATE, TAKER_FEE_RATE
-from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, TradeRules
+from tradingbot.application.run_backtest import (
+    HOLD_RULES,
+    SLIPPAGE_RATE,
+    TAKER_FEE_RATE,
+    trades_frame,
+)
+from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, Trade, TradeRules
 from tradingbot.core.backtest.metrics import max_drawdown, sharpe_ratio
 from tradingbot.core.models.dataset import FEATURE_COLUMNS, build_dataset
 from tradingbot.core.models.evaluation import (
@@ -42,15 +49,25 @@ from tradingbot.core.models.evaluation import (
 from tradingbot.core.models.train import fit_classifier
 from tradingbot.core.models.walk_forward import Fold, WalkForwardConfig, walk_forward_folds
 from tradingbot.core.ports.market_data import TIMEFRAME_SECONDS, Timeframe
+from tradingbot.core.signals.hysteresis import hysteresis_signals
 from tradingbot.core.signals.signal import Signal
 from tradingbot.core.strategies.hold import HoldStrategy
 from tradingbot.core.strategies.ml_strategy import ML_TRADE_RULES
+
+type Mapping = Literal["threshold", "hysteresis"]
+
+HYSTERESIS_ENTER_MULTIPLE = 1.5
+HYSTERESIS_EXIT_MULTIPLE = 1.0
+"""Hysteresis bars as multiples of the fold's training base rate
+(HYPOTHESES.md → H2 iteration 2). Fixed a priori — not tuning knobs."""
 
 TRIAL_SHARPES_ANNUALIZED: dict[str, float] = {
     "buy_and_hold": 0.21,
     "ma_cross_20_50_trend_exits": -0.59,
     "ml_xgb_v1_threshold_0.6": -1.66,
     "ml_xgb_v2_structure_features_threshold_0.6": -2.12,
+    "structure_trend_k3": -2.45,
+    "ml_xgb_v1_hysteresis": -1.93,
 }
 """Every strategy candidate evaluated against the development data so far,
 with its annualized Sharpe (ROADMAP.md → The honest numbers). This is the
@@ -104,6 +121,10 @@ class WalkForwardReport:
     timeframe: Timeframe
     config: WalkForwardConfig
     threshold: float
+    mapping: Mapping
+    """How probabilities became positions: "threshold" (iteration 1: binary
+    at `threshold`, barrier exits) or "hysteresis" (iteration 2: base-rate
+    regime, signal-only exits)."""
     initial_capital: Decimal
     eval_end: datetime
     """End of the evaluation window this run was clamped to (H2_EVAL_END by
@@ -114,6 +135,8 @@ class WalkForwardReport:
     folds: list[FoldResult]
     equity_curve: pl.DataFrame
     """Stitched out-of-sample curve: timestamp + equity, all test windows."""
+    trades: pl.DataFrame
+    """One row per closed OOS trade across all folds (see trades_frame)."""
     oos_sharpe: float
     oos_max_drawdown: float
     oos_final_equity: float
@@ -135,6 +158,26 @@ class WalkForwardReport:
 
 def _periods_per_year(timeframe: Timeframe) -> int:
     return SECONDS_PER_YEAR // TIMEFRAME_SECONDS[timeframe]
+
+
+def _map_probabilities(
+    probabilities: list[float],
+    train_labels: npt.NDArray[np.int8],
+    mapping: Mapping,
+    threshold: float,
+) -> tuple[list[str], TradeRules]:
+    """One fold's OOS probabilities → signals plus the exit rules that match
+    the mapping's holding horizon (ROADMAP finding #2)."""
+    if mapping == "hysteresis":
+        base_rate = float(train_labels.mean())
+        signals = hysteresis_signals(
+            probabilities,
+            enter_at=HYSTERESIS_ENTER_MULTIPLE * base_rate,
+            exit_at=HYSTERESIS_EXIT_MULTIPLE * base_rate,
+        )
+        return signals, HOLD_RULES  # regime mapping: the signal is the only exit
+    signals = [Signal.LONG.value if p >= threshold else Signal.FLAT.value for p in probabilities]
+    return signals, ML_TRADE_RULES
 
 
 def _run_engine(
@@ -172,6 +215,7 @@ def run_walk_forward(
     *,
     config: WalkForwardConfig | None = None,
     threshold: float = 0.6,
+    mapping: Mapping = "threshold",
     initial_capital: Decimal = Decimal(10_000),
     eval_end: datetime = H2_EVAL_END,
     fee_rate: Decimal = TAKER_FEE_RATE,
@@ -193,13 +237,15 @@ def run_walk_forward(
     pooled_probabilities: list[float] = []
     pooled_labels: list[float] = []
     pooled_pnls: list[Decimal] = []
+    pooled_trades: list[Trade] = []
 
     for fold in folds:
         train = dataset.slice(fold.train_start, fold.train_end - fold.train_start)
         test = dataset.slice(fold.test_start, fold.test_end - fold.test_start)
+        train_labels = train.get_column("label").to_numpy()
         model = fit_classifier(
             train.select(FEATURE_COLUMNS).to_numpy(),
-            train.get_column("label").to_numpy(),
+            train_labels,
         )
         probabilities: list[float] = model.predict_proba(test.select(FEATURE_COLUMNS).to_numpy())[
             :, 1
@@ -215,13 +261,12 @@ def run_walk_forward(
         if engine_slice[warmup, "timestamp"] != test[0, "timestamp"]:
             raise ValueError(f"Fold {fold.index}: dataset rows do not align with OHLCV bars")
 
-        signal_values = [Signal.FLAT.value] * warmup + [
-            Signal.LONG.value if p >= threshold else Signal.FLAT.value for p in probabilities
-        ]
+        test_signals, rules = _map_probabilities(probabilities, train_labels, mapping, threshold)
+        signal_values = [Signal.FLAT.value] * warmup + test_signals
         result = _run_engine(
             engine_slice,
             _PrecomputedStrategy(pl.Series("signal", signal_values)),
-            ML_TRADE_RULES,
+            rules,
             symbol,
             initial_capital,
             fee_rate,
@@ -263,6 +308,7 @@ def run_walk_forward(
         pooled_probabilities.extend(probabilities)
         pooled_labels.extend(labels)
         pooled_pnls.extend(pnls)
+        pooled_trades.extend(result.trades)
 
     oos_curve = _stitch(fold_curves, initial_capital)
     baseline_curve = _stitch(baseline_curves, initial_capital)
@@ -280,6 +326,7 @@ def run_walk_forward(
         timeframe=timeframe,
         config=config,
         threshold=threshold,
+        mapping=mapping,
         initial_capital=initial_capital,
         eval_end=eval_end,
         data_start=dev[0, "timestamp"],
@@ -287,6 +334,7 @@ def run_walk_forward(
         dataset_rows=dataset.height,
         folds=fold_results,
         equity_curve=oos_curve,
+        trades=trades_frame(pooled_trades),
         oos_sharpe=oos_sharpe,
         oos_max_drawdown=max_drawdown(oos_curve.get_column("equity")),
         oos_final_equity=float(oos_curve[-1, "equity"]),

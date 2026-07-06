@@ -11,16 +11,20 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
+import polars as pl
+
 from tradingbot.adapters.parquet.store import ParquetStore
 from tradingbot.adapters.simulated.executor import SimulatedExecutor
 from tradingbot.application.holdout import clamp_to_development
-from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, TradeRules
+from tradingbot.core.backtest.engine import BacktestEngine, BacktestResult, Trade, TradeRules
 from tradingbot.core.backtest.metrics import PERIODS_PER_YEAR_1H, max_drawdown, sharpe_ratio
+from tradingbot.core.ports.executor import Side
 from tradingbot.core.ports.market_data import Timeframe
 from tradingbot.core.ports.storage import BacktestRunId, BacktestRunRecord, ParamValue
 from tradingbot.core.strategies.base import Strategy
 from tradingbot.core.strategies.hold import HoldStrategy
 from tradingbot.core.strategies.ma_cross import MACrossStrategy
+from tradingbot.core.strategies.structure_trend import StructureTrendStrategy
 
 TAKER_FEE_RATE = Decimal("0.0005")
 SLIPPAGE_RATE = Decimal("0.001")
@@ -99,6 +103,53 @@ def to_run_record(
     )
 
 
+TRADES_SCHEMA = {
+    "entry_time": pl.Datetime("ms", "UTC"),
+    "exit_time": pl.Datetime("ms", "UTC"),
+    "side": pl.String,
+    "quantity": pl.Float64,
+    "entry_price": pl.Float64,
+    "exit_price": pl.Float64,
+    "stop_price": pl.Float64,
+    "take_profit_price": pl.Float64,
+    "pnl": pl.Float64,
+    "fees": pl.Float64,
+    "reason": pl.String,
+}
+
+
+def trades_frame(trades: list[Trade]) -> pl.DataFrame:
+    """The trade log as a display-ready frame, one row per closed round-trip.
+
+    Float64, not Decimal: this frame exists for Parquet and charting
+    (analysis currency); the accounting-grade Decimals stay on the Trade
+    objects. stop/take_profit are null where the rules disabled them.
+    """
+    return pl.DataFrame(
+        {
+            "entry_time": [t.entry_fill.timestamp for t in trades],
+            "exit_time": [t.exit_fill.timestamp for t in trades],
+            "side": ["long" if t.entry_fill.side is Side.BUY else "short" for t in trades],
+            "quantity": [float(t.entry_fill.quantity) for t in trades],
+            "entry_price": [float(t.entry_fill.price) for t in trades],
+            "exit_price": [float(t.exit_fill.price) for t in trades],
+            "stop_price": [None if t.stop is None else float(t.stop) for t in trades],
+            "take_profit_price": [
+                None if t.take_profit is None else float(t.take_profit) for t in trades
+            ],
+            "pnl": [float(t.pnl) for t in trades],
+            "fees": [float(t.entry_fill.fee + t.exit_fill.fee) for t in trades],
+            "reason": [t.reason.value for t in trades],
+        },
+        schema=TRADES_SCHEMA,
+    )
+
+
+def trades_path_for(equity_curve_path: Path) -> Path:
+    """Sibling trade-log path for an equity curve: {stem}_trades.parquet."""
+    return equity_curve_path.with_name(f"{equity_curve_path.stem}_trades.parquet")
+
+
 def run_buy_and_hold(
     data_dir: Path,
     symbol: str,
@@ -142,3 +193,19 @@ def run_ma_cross_trend(
     """
     strategy = MACrossStrategy(fast=fast, slow=slow)
     return run_strategy(strategy, HOLD_RULES, data_dir, symbol, timeframe, initial_capital)
+
+
+def run_structure_trend(
+    data_dir: Path,
+    symbol: str,
+    timeframe: Timeframe,
+    initial_capital: Decimal,
+) -> BacktestReport:
+    """Structure trend-following (HYPOTHESES.md → H4), signal-only exits.
+
+    k is fixed a priori in the strategy and deliberately not exposed here —
+    a CLI knob for it would be an invitation to search-until-profitable.
+    """
+    return run_strategy(
+        StructureTrendStrategy(), HOLD_RULES, data_dir, symbol, timeframe, initial_capital
+    )

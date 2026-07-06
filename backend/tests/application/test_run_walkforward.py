@@ -62,6 +62,25 @@ def test_full_run_structure(data_dir: Path) -> None:
     assert "this_run" in report.trial_sharpes_annualized
 
 
+def test_hysteresis_mapping_runs_with_signal_only_exits(data_dir: Path) -> None:
+    report = run_walk_forward(
+        data_dir,
+        "PF_XBTUSD",
+        "1h",
+        config=SMALL,
+        mapping="hysteresis",
+        eval_end=FAR_FUTURE,
+    )
+
+    assert report.mapping == "hysteresis"
+    assert len(report.folds) == 4
+    assert math.isfinite(report.oos_sharpe)
+    # base-rate bars are reachable (unlike an absolute 0.6 on a random walk),
+    # so the regime actually trades
+    assert report.n_trades > 0
+    assert report.trades.height == report.n_trades
+
+
 def test_eval_end_clamp_excludes_data_after_the_boundary(data_dir: Path) -> None:
     boundary = datetime(2024, 1, 1, tzinfo=UTC) + timedelta(hours=1000)
 

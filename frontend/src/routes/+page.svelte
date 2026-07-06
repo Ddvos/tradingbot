@@ -1,27 +1,40 @@
 <script lang="ts">
 	import {
+		fetchBacktestCandles,
 		fetchBacktests,
+		fetchBacktestTrades,
 		fetchEquityCurve,
+		fetchWalkforwardCandles,
 		fetchWalkforwardDetail,
 		fetchWalkforwardEquity,
 		fetchWalkforwardRuns,
+		fetchWalkforwardTrades,
 		type BacktestRun,
+		type Candle,
 		type EquityPoint,
+		type TradeMark,
 		type WalkforwardDetail,
 		type WalkforwardRun
 	} from '$lib/api';
 	import EquityChart from '$lib/EquityChart.svelte';
 	import PaperTrading from '$lib/PaperTrading.svelte';
+	import TradesPanel from '$lib/TradesPanel.svelte';
 
 	let runs = $state<BacktestRun[]>([]);
 	let selected = $state<BacktestRun | null>(null);
 	let points = $state<EquityPoint[]>([]);
+	let btCandles = $state<Candle[]>([]);
+	let btTrades = $state<TradeMark[]>([]);
+	let btTradesHint = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let loaded = $state(false);
 
 	let wfRuns = $state<WalkforwardRun[]>([]);
 	let wfDetail = $state<WalkforwardDetail | null>(null);
 	let wfPoints = $state<EquityPoint[]>([]);
+	let wfCandles = $state<Candle[]>([]);
+	let wfTrades = $state<TradeMark[]>([]);
+	let wfTradesHint = $state<string | null>(null);
 	let wfError = $state<string | null>(null);
 	let wfLoaded = $state(false);
 
@@ -55,6 +68,7 @@
 
 	async function selectRun(run: BacktestRun): Promise<void> {
 		selected = run;
+		btTradesHint = null;
 		try {
 			points = (await fetchEquityCurve(run.id)).points;
 			error = null;
@@ -62,9 +76,22 @@
 			points = [];
 			error = `Could not load the equity curve for ${run.strategy} (is the Parquet file still there?).`;
 		}
+		try {
+			btCandles = (await fetchBacktestCandles(run.id)).candles;
+		} catch {
+			btCandles = [];
+		}
+		try {
+			btTrades = (await fetchBacktestTrades(run.id)).trades;
+		} catch {
+			btTrades = [];
+			btTradesHint =
+				'No trade log for this run yet — re-run it (scripts/backtest.py --strategy … --save) to generate one.';
+		}
 	}
 
 	async function selectWfRun(run: WalkforwardRun): Promise<void> {
+		wfTradesHint = null;
 		try {
 			[wfDetail, wfPoints] = await Promise.all([
 				fetchWalkforwardDetail(run.symbol, run.run),
@@ -75,6 +102,18 @@
 			wfDetail = null;
 			wfPoints = [];
 			wfError = `Could not load walk-forward run ${run.run} (are its Parquet files still there?).`;
+		}
+		try {
+			wfCandles = (await fetchWalkforwardCandles(run.symbol, run.run)).candles;
+		} catch {
+			wfCandles = [];
+		}
+		try {
+			wfTrades = (await fetchWalkforwardTrades(run.symbol, run.run)).trades;
+		} catch {
+			wfTrades = [];
+			wfTradesHint =
+				'This run predates trade logging — re-run the walk-forward (scripts/walkforward.py) to generate one.';
 		}
 	}
 
@@ -162,6 +201,22 @@
 			</h2>
 			<div class="rounded-lg border border-gray-200 p-2">
 				<EquityChart {points} />
+			</div>
+		</section>
+	{/if}
+
+	{#if selected && btCandles.length > 0}
+		<section class="space-y-3">
+			<h2 class="text-lg font-medium text-gray-900">
+				Trades on the chart — {selected.strategy}
+			</h2>
+			{#if btTradesHint}
+				<p class="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+					{btTradesHint}
+				</p>
+			{/if}
+			<div class="rounded-lg border border-gray-200 p-2">
+				<TradesPanel candles={btCandles} trades={btTrades} />
 			</div>
 		</section>
 	{/if}
@@ -276,6 +331,18 @@
 					</tbody>
 				</table>
 			</div>
+
+			{#if wfCandles.length > 0}
+				<h3 class="text-base font-medium text-gray-900">Trades on the chart</h3>
+				{#if wfTradesHint}
+					<p class="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+						{wfTradesHint}
+					</p>
+				{/if}
+				<div class="rounded-lg border border-gray-200 p-2">
+					<TradesPanel candles={wfCandles} trades={wfTrades} />
+				</div>
+			{/if}
 
 			<h3 class="text-base font-medium text-gray-900">Report</h3>
 			<pre

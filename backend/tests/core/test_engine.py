@@ -103,6 +103,25 @@ def test_take_profit_exits_intrabar() -> None:
     assert trade.pnl == Decimal("199.99999998")
 
 
+def test_trade_records_the_barrier_levels_it_ran_with() -> None:
+    # entry 100 with ATR 2: stop 100 - 1.5*2 = 97, take-profit 100 + 3*2 = 106
+    bars = frame([(100, 101, 99, 100), (100, 101, 96, 98)])
+    result = make_engine(["long", "long"], BARRIER_RULES).run(bars, "X")
+
+    trade = result.trades[0]
+    assert trade.stop == Decimal("97.0")
+    assert trade.take_profit == Decimal("106.0")
+
+
+def test_trade_barriers_are_none_without_barrier_rules() -> None:
+    bars = frame([(100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100)])
+    result = make_engine(["long", "flat", "flat"], NO_RULES).run(bars, "X")
+
+    trade = result.trades[0]
+    assert trade.stop is None
+    assert trade.take_profit is None
+
+
 def test_stop_wins_when_both_barriers_hit_in_one_bar() -> None:
     bars = frame([(100, 101, 99, 100), (100, 107, 96, 100)])
     result = make_engine(["long", "long"], BARRIER_RULES).run(bars, "X")

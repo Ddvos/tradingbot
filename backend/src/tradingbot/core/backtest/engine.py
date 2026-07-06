@@ -70,6 +70,10 @@ class Trade:
     exit_fill: Fill
     reason: ExitReason
     pnl: Decimal
+    stop: Decimal | None = None
+    """The stop-loss level this position actually ran with (None = no stop)."""
+    take_profit: Decimal | None = None
+    """The take-profit level this position actually ran with (None = none)."""
 
 
 @dataclass(frozen=True)
@@ -284,7 +288,9 @@ class BacktestEngine:
         sign = Decimal(1) if position.quantity > 0 else Decimal(-1)
         price_move = sign * (fill.price - position.entry_fill.price)
         pnl = price_move * abs(position.quantity) - position.entry_fill.fee - fill.fee
-        self._trades.append(Trade(position.entry_fill, fill, reason, pnl))
+        self._trades.append(
+            Trade(position.entry_fill, fill, reason, pnl, position.stop, position.take_profit)
+        )
         self._position = None
 
     def _check_barriers(self, symbol: str, ts: datetime, high_p: Decimal, low_p: Decimal) -> None:

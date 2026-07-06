@@ -22,11 +22,15 @@ from tradingbot.application.run_backtest import (
     run_buy_and_hold,
     run_ma_cross,
     run_ma_cross_trend,
+    run_structure_trend,
     to_run_record,
+    trades_frame,
+    trades_path_for,
 )
 from tradingbot.config.settings import Settings
 from tradingbot.core.ports.market_data import Timeframe
 from tradingbot.core.ports.storage import ParamValue
+from tradingbot.core.strategies.structure_trend import StructureTrendStrategy
 
 BACKEND_DIR = Path(__file__).parent.parent
 DEFAULT_DATA_DIR = BACKEND_DIR / "data" / "raw" / "ohlcv"
@@ -66,7 +70,7 @@ def main() -> None:
     parser.add_argument(
         "--strategy",
         default="ma_cross",
-        choices=["ma_cross", "ma_cross_trend", "buy_and_hold"],
+        choices=["ma_cross", "ma_cross_trend", "structure_trend", "buy_and_hold"],
     )
     parser.add_argument("--fast", type=int, default=20)
     parser.add_argument("--slow", type=int, default=50)
@@ -91,6 +95,8 @@ def main() -> None:
         report = run_ma_cross_trend(
             args.data_dir, args.symbol, timeframe, args.capital, fast=args.fast, slow=args.slow
         )
+    elif args.strategy == "structure_trend":
+        report = run_structure_trend(args.data_dir, args.symbol, timeframe, args.capital)
     else:
         report = run_buy_and_hold(args.data_dir, args.symbol, timeframe, args.capital)
 
@@ -98,6 +104,7 @@ def main() -> None:
     out_path = args.out_dir / args.symbol / f"{timeframe}_{args.strategy}.parquet"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     curve.write_parquet(out_path)
+    trades_frame(report.result.trades).write_parquet(trades_path_for(out_path))
 
     start, end = curve[0, "timestamp"], curve[-1, "timestamp"]
     print(f"{args.strategy} {args.symbol} {timeframe}: {report.num_bars} bars, {start} -> {end}")
@@ -107,11 +114,14 @@ def main() -> None:
     print(f"  Max drawdown    : {report.max_drawdown:>12.2%}")
     print_trade_stats(report)
     print(f"Equity curve written to {out_path}")
+    print(f"Trade log written to {trades_path_for(out_path)}")
 
     if args.save:
-        params: dict[str, ParamValue] = (
-            {"fast": args.fast, "slow": args.slow} if args.strategy.startswith("ma_cross") else {}
-        )
+        params: dict[str, ParamValue] = {}
+        if args.strategy.startswith("ma_cross"):
+            params = {"fast": args.fast, "slow": args.slow}
+        elif args.strategy == "structure_trend":
+            params = {"k": StructureTrendStrategy().k}
         record = to_run_record(report, args.strategy, args.symbol, timeframe, params, out_path)
         repositories = build_postgres_repositories(Settings().database_url)
         repositories.backtest_runs.add(record)

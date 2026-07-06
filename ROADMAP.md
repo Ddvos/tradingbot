@@ -109,6 +109,35 @@ verdict. 116 tests total.
   (status, trades, pause/resume/promote/demote), dashboard paper section.
   **Nothing is promoted** — see the Slice 5 gate note. 147 tests total.
 
+**Dashboard: trades on the price chart (6 Jul 2026):** the engine records
+the stop/take-profit levels each position actually ran with (`Trade.stop`
+/ `.take_profit`); every backtest writes a trade log
+(`…_trades.parquet` next to its equity curve) and walk-forward runs
+persist `trades.parquet`; new candles + trades endpoints on both API
+slices (OHLCV served from `ohlcv_dir`). The dashboard draws a candlestick
+chart with entry/exit markers (arrows by side, dots colored by exit
+reason) and, on click, zooms to a trade and draws its entry, stop, and
+take-profit levels. Older artifacts predate the trade logs — re-running
+the backtest/walk-forward regenerates them (verified deterministic:
+identical metrics). 165 tests total.
+
+**H2 iteration 2 — hysteresis mapping (5 Jul 2026): rejected.** Enter long
+at P ≥ 1.5× train base rate, stay while ≥ 1.0×, signal-only exits
+(pre-registered in `HYPOTHESES.md`). Same walk-forward, same eval window as
+iteration 1: OOS Sharpe **−1.93** (CI [−3.66, −0.22]), 360 trades, PF 0.77
+vs buy-and-hold 0.67. Trade-count problem solved, economics still negative;
+IC unchanged at 0.218. Pattern across all candidates so far: a real but
+small edge loses to 1h taker costs under every mapping tried. 154 tests
+total. Two of five H2 iterations spent.
+
+**Hypothesis H4 — structure trend-following (5 Jul 2026):** pure price
+action, long/short: higher highs + higher lows → long, the mirror → short,
+position flips only on a fully confirmed opposite structure (k=3 swings
+from the H3 library), signal-only exits per finding #2. Pre-registered in
+`HYPOTHESES.md`, one dev-window backtest: **rejected** — Sharpe −2.45,
+profit factor 0.83, 1,388 structure flips (3× MA-cross's churn),
+€10,000 → €34. Third strike for 1h trend persistence. 150 tests total.
+
 **Slice 2 scope notes:** features are 1h-only for now (multi-timeframe 4H/15M
 set deferred); labels are binary long-only; threshold 0.6 fixed a priori.
 
@@ -120,6 +149,7 @@ pessimistic costs: 0.05% taker, 0.1% slippage, ~11%/yr flat funding):
 | Buy-and-hold (**the baseline to beat**) | **0.21** | −71% | €7,963 |
 | MA-cross 20/50, v1 risk rules (6-bar time exit) | −10.1 | −100% | €0.11 |
 | MA-cross 20/50, signal-only exits | −0.59 | −70% | €3,330 |
+| Structure trend k=3, signal-only exits (H4) | −2.45 | −99.8% | €34 |
 
 Note the Slice 0 baseline (Sharpe 0.42, €14,482) is superseded: the engine now
 fills at next-bar open and charges funding, both of which buy-and-hold on a
@@ -151,10 +181,14 @@ validation — so the hypothesis is not dead, and the iteration budget
 applies (max 5 per hypothesis; threshold/mapping changes count as
 iterations and must be re-validated through the same walk-forward). Decide:
 iterate on the prediction→position mapping, or fold the hypothesis. The
-feature axis was explored on 5 Jul (H3, null result) — the
-prediction→position mapping remains the open axis. Slice 5 is built and
-waiting: the moment a candidate passes, promote it and the ≥4-week paper
-clock starts.
+feature axis was explored on 5 Jul (H3, null result), a pure price-action
+trend strategy was rejected the same day (H4, Sharpe −2.45), and mapping
+iteration 2 (hysteresis regime) was rejected as well (−1.93) — three H2
+iterations remain. The evidence points at cost-per-decision, not signal
+quality: iteration 3 candidates are confidence-scaled *sizing* (needs
+fractional-position engine support) or a 4h decision timeframe. Slice 5 is
+built and waiting: the moment a candidate passes, promote it and the
+≥4-week paper clock starts.
 
 **Running the stack (Slice 4):**
 

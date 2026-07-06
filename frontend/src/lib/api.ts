@@ -92,6 +92,37 @@ export interface WalkforwardEquity {
 	points: EquityPoint[];
 }
 
+export interface Candle {
+	time: number; // unix seconds, UTC — the format lightweight-charts expects
+	open: number;
+	high: number;
+	low: number;
+	close: number;
+}
+
+// One closed round-trip; stop/take-profit are null where the rules had none
+export interface TradeMark {
+	entry_time: string;
+	exit_time: string;
+	side: string; // 'long' | 'short'
+	quantity: number;
+	entry_price: number;
+	exit_price: number;
+	stop_price: number | null;
+	take_profit_price: number | null;
+	pnl: number;
+	fees: number;
+	reason: string; // 'signal' | 'stop_loss' | 'take_profit' | 'time'
+}
+
+export interface TradesPayload {
+	trades: TradeMark[];
+}
+
+export interface CandlesPayload {
+	candles: Candle[];
+}
+
 export const fetchBacktests = (): Promise<BacktestRun[]> => get('/backtests');
 
 export const fetchEquityCurve = (runId: string): Promise<EquityCurve> =>
@@ -104,6 +135,18 @@ export const fetchWalkforwardDetail = (symbol: string, run: string): Promise<Wal
 
 export const fetchWalkforwardEquity = (symbol: string, run: string): Promise<WalkforwardEquity> =>
 	get(`/walkforward/${symbol}/${run}/equity`);
+
+export const fetchBacktestTrades = (runId: string): Promise<TradesPayload> =>
+	get(`/backtests/${runId}/trades`);
+
+export const fetchBacktestCandles = (runId: string): Promise<CandlesPayload> =>
+	get(`/backtests/${runId}/candles`);
+
+export const fetchWalkforwardTrades = (symbol: string, run: string): Promise<TradesPayload> =>
+	get(`/walkforward/${symbol}/${run}/trades`);
+
+export const fetchWalkforwardCandles = (symbol: string, run: string): Promise<CandlesPayload> =>
+	get(`/walkforward/${symbol}/${run}/candles`);
 
 // --- Paper trading (live runner) ---
 // "idle" = nothing promoted. Decimal money fields arrive as strings (or numbers)

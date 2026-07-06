@@ -59,3 +59,42 @@ class WalkForwardEquityResponse(BaseModel):
     symbol: str
     run: str
     points: list[EquityPoint]
+
+
+class WalkForwardTrade(BaseModel):
+    """One closed OOS round-trip from the run's trades.parquet. stop/take-profit
+    are null where the mapping's rules disabled them (hysteresis: always)."""
+
+    entry_time: datetime
+    exit_time: datetime
+    side: str
+    quantity: float
+    entry_price: float
+    exit_price: float
+    stop_price: float | None
+    take_profit_price: float | None
+    pnl: float
+    fees: float
+    reason: str
+
+
+class WalkForwardTradesResponse(BaseModel):
+    symbol: str
+    run: str
+    trades: list[WalkForwardTrade]
+
+
+class Candle(BaseModel):
+    time: int
+    """Unix seconds (UTC) — the time format lightweight-charts expects."""
+
+    open: float
+    high: float
+    low: float
+    close: float
+
+
+class WalkForwardCandlesResponse(BaseModel):
+    symbol: str
+    run: str
+    candles: list[Candle]
