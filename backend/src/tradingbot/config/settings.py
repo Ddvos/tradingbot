@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     """Where scripts/walkforward.py writes its run artifacts. Relative to the
     process working directory — backend/, matching how uvicorn is started."""
 
+    ohlcv_dir: Path = Path("data/raw/ohlcv")
+    """Where scripts/backfill.py keeps the OHLCV Parquet files; the API reads
+    them to serve candles behind trade charts. Same relative-path convention
+    as walkforward_dir."""
+
     models_dir: Path = Path("data/models")
     """Where trained .joblib artifacts live (scripts/train.py writes here).
     Relative to the process working directory — backend/."""

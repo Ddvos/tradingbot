@@ -54,3 +54,40 @@ class EquityPoint(BaseModel):
 class EquityCurveResponse(BaseModel):
     run_id: UUID
     points: list[EquityPoint]
+
+
+class BacktestTrade(BaseModel):
+    """One closed round-trip from the run's trade log (Parquet sibling of the
+    equity curve). stop/take-profit are null where the rules disabled them."""
+
+    entry_time: datetime
+    exit_time: datetime
+    side: str
+    quantity: float
+    entry_price: float
+    exit_price: float
+    stop_price: float | None
+    take_profit_price: float | None
+    pnl: float
+    fees: float
+    reason: str
+
+
+class TradesResponse(BaseModel):
+    run_id: UUID
+    trades: list[BacktestTrade]
+
+
+class Candle(BaseModel):
+    time: int
+    """Unix seconds (UTC) — the time format lightweight-charts expects."""
+
+    open: float
+    high: float
+    low: float
+    close: float
+
+
+class CandlesResponse(BaseModel):
+    run_id: UUID
+    candles: list[Candle]

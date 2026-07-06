@@ -16,11 +16,15 @@ import polars as pl
 from fastapi import HTTPException
 
 from tradingbot.api.features.walkforward.schemas import (
+    Candle,
     EquityPoint,
     FoldMetrics,
+    WalkForwardCandlesResponse,
     WalkForwardEquityResponse,
     WalkForwardRunDetail,
     WalkForwardRunSummary,
+    WalkForwardTrade,
+    WalkForwardTradesResponse,
 )
 from tradingbot.core.backtest.metrics import max_drawdown, sharpe_ratio
 from tradingbot.core.ports.market_data import TIMEFRAME_SECONDS, Timeframe
@@ -82,6 +86,46 @@ def get_equity(base_dir: Path, symbol: str, run: str) -> WalkForwardEquityRespon
         EquityPoint(time=time, value=value) for time, value in zip(times, values, strict=True)
     ]
     return WalkForwardEquityResponse(symbol=symbol, run=run, points=points)
+
+
+def get_trades(base_dir: Path, symbol: str, run: str) -> WalkForwardTradesResponse:
+    run_dir = _run_dir_or_404(base_dir, symbol, run)
+    path = run_dir / "trades.parquet"
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{symbol}/{run} has no trade log — runs from before 6 Jul 2026"
+            " predate trade persistence; re-run the walk-forward to generate one",
+        )
+    frame = pl.read_parquet(path)
+    trades = [WalkForwardTrade.model_validate(row) for row in frame.iter_rows(named=True)]
+    return WalkForwardTradesResponse(symbol=symbol, run=run, trades=trades)
+
+
+def get_candles(
+    base_dir: Path, ohlcv_dir: Path, symbol: str, run: str
+) -> WalkForwardCandlesResponse:
+    """Price history spanning the run's stitched OOS window, for trade charts."""
+    run_dir = _run_dir_or_404(base_dir, symbol, run)
+    parsed = _parse_run_name(run_dir.name)
+    if parsed is None:
+        raise HTTPException(status_code=404, detail=f"{symbol}/{run} is not a walk-forward run")
+    timeframe = parsed[0]
+    path = ohlcv_dir / symbol / f"{timeframe}.parquet"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"No OHLCV data at {path}")
+    window = pl.read_parquet(run_dir / "equity.parquet").get_column("timestamp")
+    ohlcv = pl.read_parquet(path).filter(pl.col("timestamp").is_between(window.min(), window.max()))
+    times: list[int] = ohlcv.get_column("timestamp").dt.epoch(time_unit="s").to_list()
+    opens: list[float] = ohlcv.get_column("open").to_list()
+    highs: list[float] = ohlcv.get_column("high").to_list()
+    lows: list[float] = ohlcv.get_column("low").to_list()
+    closes: list[float] = ohlcv.get_column("close").to_list()
+    candles = [
+        Candle(time=t, open=o, high=h, low=lo, close=c)
+        for t, o, h, lo, c in zip(times, opens, highs, lows, closes, strict=True)
+    ]
+    return WalkForwardCandlesResponse(symbol=symbol, run=run, candles=candles)
 
 
 def _summarize(run_dir: Path, symbol: str) -> WalkForwardRunSummary | None:

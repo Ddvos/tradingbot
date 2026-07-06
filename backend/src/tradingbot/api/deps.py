@@ -18,5 +18,9 @@ def get_walkforward_dir() -> Path:
     raise RuntimeError("Dependency not wired — create_app installs the override")
 
 
+def get_ohlcv_dir() -> Path:
+    raise RuntimeError("Dependency not wired — create_app installs the override")
+
+
 def get_paper_symbol() -> str:
     raise RuntimeError("Dependency not wired — create_app installs the override")

@@ -23,7 +23,7 @@ from typing import cast, get_args
 import polars as pl
 
 from tradingbot.application.holdout import HOLDOUT_START
-from tradingbot.application.run_walkforward import WalkForwardReport, run_walk_forward
+from tradingbot.application.run_walkforward import Mapping, WalkForwardReport, run_walk_forward
 from tradingbot.core.models.walk_forward import WalkForwardConfig
 from tradingbot.core.ports.market_data import Timeframe
 
@@ -38,6 +38,7 @@ class _Args(argparse.Namespace):
     name: str
     capital: Decimal
     threshold: float
+    mapping: str
     train_bars: int
     test_bars: int
     purge_bars: int
@@ -85,8 +86,13 @@ def render_markdown(report: WalkForwardReport, run_stamp: str) -> str:
         f" untouched (see HOLDOUT.md)",
         f"- Splits: train {c.train_bars} bars, test {c.test_bars}, purge {c.purge_bars},"
         f" embargo {c.embargo_bars} -> {len(report.folds)} folds, model retrained per fold",
-        f"- Strategy: long when P(target) >= {report.threshold}, v1 risk rules,"
-        f" take-profit 2.0x ATR (aligned to the label)",
+        (
+            f"- Strategy: long when P(target) >= {report.threshold}, v1 risk rules,"
+            f" take-profit 2.0x ATR (aligned to the label)"
+            if report.mapping == "threshold"
+            else "- Strategy: hysteresis regime — enter long at P >= 1.5x the train base"
+            " rate, stay while P >= 1.0x base rate; signal-only exits (no stop/TP/time)"
+        ),
         "- Costs: 0.05% taker fee, 0.1% slippage, flat pessimistic funding",
         "",
         "## Out-of-sample result (all test windows stitched)",
@@ -146,6 +152,12 @@ def main() -> None:
     parser.add_argument("--name", default="xgb_v1")
     parser.add_argument("--capital", type=Decimal, default=Decimal(10000))
     parser.add_argument("--threshold", type=float, default=0.6)
+    parser.add_argument(
+        "--mapping",
+        default="threshold",
+        choices=["threshold", "hysteresis"],
+        help="probability->position mapping; hysteresis = H2 iteration 2 (HYPOTHESES.md)",
+    )
     parser.add_argument("--train-bars", type=int, default=WalkForwardConfig.train_bars)
     parser.add_argument("--test-bars", type=int, default=WalkForwardConfig.test_bars)
     parser.add_argument("--purge-bars", type=int, default=WalkForwardConfig.purge_bars)
@@ -169,6 +181,7 @@ def main() -> None:
         timeframe,
         config=config,
         threshold=args.threshold,
+        mapping=cast(Mapping, args.mapping),  # narrowed by argparse choices
         initial_capital=args.capital,
     )
 
@@ -177,6 +190,7 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     folds_frame(report).write_parquet(run_dir / "folds.parquet")
     report.equity_curve.write_parquet(run_dir / "equity.parquet")
+    report.trades.write_parquet(run_dir / "trades.parquet")
     markdown = render_markdown(report, run_stamp)
     (run_dir / "report.md").write_text(markdown)
 
