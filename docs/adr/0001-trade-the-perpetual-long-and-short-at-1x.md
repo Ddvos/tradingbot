@@ -5,6 +5,8 @@ date: 2026-10-18
 
 # Trade the Kraken BTC perpetual long and short at 1x, not spot
 
+> Order changed by ADR-0002 (19 October 2026): a turning-point detector comes first and spot is traded before the perpetual. The instrument reasoning below applies to the final phase.
+
 The owner wants a real-money bot that earns when Bitcoin rises and when it falls. Spot Bitcoin can only be held or sold to cash, so it can sidestep a fall but never earn on one. We therefore trade one instrument, the Kraken Futures BTC perpetual, in both directions, and cap every position at the size of the account (1x) so that a long cannot be liquidated and a short is closed by its stop long before liquidation. The whole account runs in USD, the contract's own currency, converted once by hand, so the bot carries no currency conversion code.
 
 ## Considered options
