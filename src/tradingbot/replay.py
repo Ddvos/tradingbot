@@ -76,18 +76,18 @@ def settled_index(mark_index: int, pending_index: Sequence[int], tolerance: Tole
     """The step from which a mark's outcome is certain.
 
     Two things can still change it before then: a mark placed later that is
-    nearer to a turning point inside this mark's window (possible until two
+    nearer to a turning point inside this mark's tolerance (possible until two
     tolerances after the mark), and a turning point still to be confirmed
-    inside the window (possible until the earliest candle that can still become
-    a turning point lies beyond it). `pending_index` holds, per step, the index
-    of that candle; it never moves backwards. If the series ends first, the
-    outcome is settled by its last step.
+    inside the tolerance (possible until the earliest candle that can still
+    become a turning point lies beyond it). `pending_index` holds, per step,
+    the index of that candle; it never moves backwards. If the series ends
+    first, the outcome is settled by its last step.
     """
     last = len(pending_index) - 1
-    window_end = mark_index + tolerance.candles
+    tolerance_end = mark_index + tolerance.candles
     competitors_placed = mark_index + 2 * tolerance.candles
-    window_settled = bisect_right(pending_index, window_end)
-    return min(max(competitors_placed, window_settled), last)
+    tolerance_settled = bisect_right(pending_index, tolerance_end)
+    return min(max(competitors_placed, tolerance_settled), last)
 
 
 def run(

@@ -26,6 +26,8 @@ preceding extreme a turning point: 8%, fixed in slice 2 (#11)."""
 
 
 class Kind(Enum):
+    """Whether a turning point or a mark is a top or a bottom."""
+
     TOP = "top"
     BOTTOM = "bottom"
 

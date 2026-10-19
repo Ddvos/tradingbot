@@ -4,8 +4,11 @@ A mark is a hit when a turning point of its kind lies within the tolerance:
 at most `Tolerance.candles` candles before or after it, with the mark's close
 within `Tolerance.percent` of the turning point's extreme price. Each turning
 point takes at most one hit, the nearest eligible mark in candles (the earlier
-one on a tie), and each mark can be the hit of at most one turning point. Every
-other mark is a false mark; every turning point without a hit is a miss.
+one on a tie), and each mark can be the hit of at most one turning point.
+Turning points are matched in time order, so when one mark lies inside the
+tolerance of two turning points of its kind the earlier turning point takes
+it. Every other mark is a false mark; every turning point without a hit is a
+miss.
 
 Distances are counted in candles of the replayed series, not in hours, so a
 missing hour does not widen or narrow the tolerance.
@@ -70,6 +73,7 @@ class Score:
 
 
 def give_up(mark: Mark, point: TurningPoint) -> float:
+    """Percent from the extreme to the close, positive below a top or above a bottom."""
     away = point.price - mark.price if point.kind is Kind.TOP else mark.price - point.price
     return away / point.price * 100
 

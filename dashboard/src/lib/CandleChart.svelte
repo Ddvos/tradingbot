@@ -36,7 +36,7 @@
 	let shownCandles: Candle[] | undefined;
 	let shownCount = 0;
 
-	const toBar = (c: Candle) => ({
+	const toCandlestick = (c: Candle) => ({
 		time: c.time as UTCTimestamp,
 		open: c.open,
 		high: c.high,
@@ -67,14 +67,14 @@
 		if (!chart || !series) return;
 		const count = Math.min(visible ?? candles.length, candles.length);
 		if (candles !== shownCandles || count < shownCount) {
-			series.setData(candles.slice(0, count).map(toBar));
+			series.setData(candles.slice(0, count).map(toCandlestick));
 			shownCandles = candles;
 			shownCount = count;
 			chart.timeScale().fitContent();
 			return;
 		}
 		for (let i = shownCount; i < count; i++) {
-			series.update(toBar(candles[i]));
+			series.update(toCandlestick(candles[i]));
 		}
 		shownCount = count;
 	});

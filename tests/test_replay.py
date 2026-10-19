@@ -1,5 +1,6 @@
 """Replay: candles go to the detector one at a time, so nothing later is ever visible."""
 
+import random
 from collections.abc import Sequence
 
 import pytest
@@ -15,8 +16,7 @@ T0 = 1_704_067_200  # 2024-01-01T00:00:00Z
 
 
 def random_walk(hours: int, seed: int) -> list[Candle]:
-    import random
-
+    """A seeded hourly random walk with hourly moves of up to 3%."""
     rng = random.Random(seed)
     candles: list[Candle] = []
     close = 1000.0

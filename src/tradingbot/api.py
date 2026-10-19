@@ -3,12 +3,13 @@
 `GET /candles?timeframe=1h|4h|1d&from=...&to=...` answers candles from the
 SQLite store. `from` and `to` are Unix seconds or ISO 8601 and are widened to
 whole periods, so a 4-hour or daily candle is always built from every hour it
-covers. `GET /turning-points` answers the hindsight turning points of the same
-window, on the candle of the requested timeframe that holds the hourly extreme.
-`GET /replay?detector=...` replays the hourly candles through a detector and
-answers its marks, their outcomes and the score.
+covers. `GET /turning-points?timeframe=...` answers the hindsight turning points of
+the whole development period, on the candle of the requested timeframe that
+holds the hourly extreme. `GET /replay?detector=...` replays the development
+period's hourly candles through a detector and answers its marks, their
+outcomes and the score.
 
-Every route reads through the development window, so nothing past the
+Every route reads through `read_development`, so nothing past the
 out-of-sample boundary is ever served.
 """
 
@@ -105,8 +106,7 @@ def create_app(db_path: str | Path) -> FastAPI:
         CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"]
     )
 
-    def read(timeframe: Timeframe, from_: str | None, to: str | None) -> list[Candle]:
-        start, end = whole_periods(timeframe, from_, to)
+    def read(start: int | None = None, end: int | None = None) -> list[Candle]:
         with CandleStore(db_path) as store:
             return read_development(store, start, end)
 
@@ -116,30 +116,20 @@ def create_app(db_path: str | Path) -> FastAPI:
         from_: str | None = Query(default=None, alias="from"),
         to: str | None = None,
     ) -> CandlesOut:
-        hourly = read(timeframe, from_, to)
+        hourly = read(*whole_periods(timeframe, from_, to))
         return CandlesOut(timeframe=timeframe.value, candles=resample(hourly, timeframe))
 
     @app.get("/turning-points")
-    def turning_points(
-        timeframe: Timeframe,
-        from_: str | None = Query(default=None, alias="from"),
-        to: str | None = None,
-    ) -> TurningPointsOut:
-        hourly = read(timeframe, from_, to)
-        points = [on_timeframe(p, timeframe) for p in find_turning_points(hourly)]
+    def turning_points(timeframe: Timeframe) -> TurningPointsOut:
+        points = [on_timeframe(p, timeframe) for p in find_turning_points(read())]
         return TurningPointsOut(timeframe=timeframe.value, turning_points=points)
 
     @app.get("/replay")
-    def replay(
-        detector: str,
-        from_: str | None = Query(default=None, alias="from"),
-        to: str | None = None,
-    ) -> ReplayOut:
+    def replay(detector: str) -> ReplayOut:
         build = DETECTORS.get(detector)
         if build is None:
             known = ", ".join(DETECTORS)
             raise HTTPException(404, f"unknown detector {detector!r}; known detectors: {known}")
-        hourly = read(Timeframe.H1, from_, to)
-        return ReplayOut.of(run(hourly, build()))
+        return ReplayOut.of(run(read(), build()))
 
     return app

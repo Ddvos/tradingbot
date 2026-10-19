@@ -1,4 +1,4 @@
-"""The out-of-sample boundary and the development window.
+"""The out-of-sample boundary and the development period.
 
 Development data is every hourly candle before the boundary. Every development
 entry point (the API, the batch replay) reads candles through

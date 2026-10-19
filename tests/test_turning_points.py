@@ -1,5 +1,7 @@
 """Turning points in hindsight: the extremes before a move of the reversal size the other way."""
 
+import random
+
 from tradingbot.candles import Candle
 from tradingbot.turning_points import Kind, TurningPoint, find_turning_points
 
@@ -60,8 +62,6 @@ def test_an_empty_series_has_no_turning_points() -> None:
 
 def random_walk(hours: int, seed: int) -> list[Candle]:
     """A seeded hourly random walk with hourly moves of up to 3%."""
-    import random
-
     rng = random.Random(seed)
     candles: list[Candle] = []
     close = 1000.0

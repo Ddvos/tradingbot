@@ -58,7 +58,7 @@ uv run tradingbot serve
 
 Serves `GET http://localhost:8000/candles?timeframe=1h|4h|1d&from=...&to=...`. `from` and `to` are optional, as Unix seconds or ISO 8601 (`2024-01-01T00:00:00Z`), and are widened to whole periods, so 4-hour and daily candles are always built from every hour they cover. 4-hour candles start at 00:00, 04:00, ... UTC; daily candles at 00:00 UTC. Interactive docs are at `http://localhost:8000/docs`.
 
-Two more routes serve the harness: `GET /turning-points?timeframe=1h|4h|1d` answers the turning points of the window (on 4h and 1d they sit on the candle that holds the hourly extreme), and `GET /replay?detector=floor` replays the hourly candles through a detector and answers the candles, the turning points, every mark with its outcome, and the score. All three routes stop at the out-of-sample boundary (see below).
+Two more routes serve the harness over the whole development period: `GET /turning-points?timeframe=1h|4h|1d` answers the turning points (on 4h and 1d they sit on the candle that holds the hourly extreme), and `GET /replay?detector=floor` replays the hourly candles through a detector and answers the candles, the turning points, every mark with its outcome, and the score. All three routes stop at the out-of-sample boundary (see below).
 
 ## Start the dashboard
 
@@ -70,7 +70,7 @@ One page, two modes. It reads from the API, so start that first.
 
 **Hindsight** shows the whole development period as candlesticks with a 1h / 4h / 1d switch and the true turning points drawn as blue dots on their extremes.
 
-**Replay** hands the hourly candles to a detector one at a time. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from nothing. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in candles) or red (false mark) as soon as no later candle can change it: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's window. Turning points appear as they are confirmed. The line under the controls is the detector's score over the whole development period, the same number the batch command prints.
+**Replay** hands the hourly candles to a detector one at a time. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from nothing. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in candles) or red (false mark) as soon as no later candle can change it: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's tolerance. Turning points appear as they are confirmed. The line under the controls is the detector's score over the whole development period, the same number the batch command prints.
 
 ## Replay from the command line
 
@@ -78,16 +78,16 @@ One page, two modes. It reads from the API, so start that first.
 uv run tradingbot replay floor
 ```
 
-Replays the development period through the named detector, prints its score and writes the chart data (the same JSON the API answers for `/replay`) to `replay-<detector>.json` next to the store, or to `--out`. The score is identical run to run. Only `floor` exists so far.
+Replays the development period through the named detector, prints its score and writes the chart data (the same JSON the API answers for `/replay`) to `replay-<detector>.json` next to the store, or to `--out`. The score is identical run to run. Only `floor` exists so far. The output has this shape (the numbers below are made up; the floor has not been scored over the real development period yet):
 
 ```
-Replayed floor over the development period: 2654 candles from 2024-06-30T00:00:00Z to 2024-10-18T13:00:00Z.
-  turning points   4
-  marks            41
-  hits             0  (hit rate 0.0%)
-  false marks      41  (false-mark rate 100.0%)
-  median timing    n/a (no hits)
-  median give-up   n/a (no hits)
+Replayed floor over the development period: 96000 candles from 2013-10-06T21:00:00Z to 2024-10-18T23:00:00Z.
+  turning points   250
+  marks            1800
+  hits             20  (hit rate 8.0%)
+  false marks      1780  (false-mark rate 98.9%)
+  median timing    +3.0 candles (late)
+  median give-up   1.60%
 ```
 
 ## Definitions fixed in slice 2
