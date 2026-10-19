@@ -11,43 +11,53 @@ dashboard, which only ever read the development period.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from tradingbot.candles import iso
 from tradingbot.detectors import Detector
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY
 from tradingbot.replay import ReplayResult, run
-from tradingbot.scoring import Score
+from tradingbot.scoring import Score, describe_score
 from tradingbot.store import CandleStore
 
 DEFAULT_LOG = "out-of-sample.log"
-"""Next to the code rather than the data, so every run is committed with the repository."""
+"""In the working directory, like every path the command takes: the repository
+root when run as documented, so every run is committed with the code."""
 
 
 class Refused(Exception):
     """The check did not run; the message says why."""
 
 
+@dataclass(frozen=True, slots=True)
+class LogEntry:
+    """One line of the log: when the run happened, the detector, the period and the score."""
+
+    when: str
+    detector: str
+    period: str
+    score: str
+
+    def line(self) -> str:
+        return "\t".join([self.when, self.detector, self.period, self.score])
+
+    @classmethod
+    def parse(cls, line: str) -> LogEntry:
+        when, detector, period, score = line.split("\t")
+        return cls(when, detector, period, score)
+
+
 def summarize(score: Score) -> str:
     """The score on one line, for the log."""
-    if score.median_timing is None or score.median_give_up is None:
-        timing = give_up = "n/a"
-    else:
-        timing = f"{score.median_timing:+.1f} candles"
-        give_up = f"{score.median_give_up:.2f}%"
-    return (
-        f"turning points {score.turning_points}, marks {score.marks}, "
-        f"hits {score.hits} (hit rate {score.hit_rate:.1%}), "
-        f"false marks {score.false_marks} (false-mark rate {score.false_mark_rate:.1%}), "
-        f"median timing {timing}, median give-up {give_up}"
-    )
+    return ", ".join(f"{label} {value}" for label, value in describe_score(score))
 
 
 def logged_detectors(log: Path) -> list[str]:
     """The detectors that already had their out-of-sample run, in log order."""
     if not log.exists():
         return []
-    return [line.split("\t")[1] for line in log.read_text().splitlines() if "\t" in line]
+    return [LogEntry.parse(line).detector for line in log.read_text().splitlines() if line]
 
 
 def check(store: CandleStore, detector: Detector, log: Path, now: int) -> ReplayResult:
@@ -69,14 +79,12 @@ def check(store: CandleStore, detector: Detector, log: Path, now: int) -> Replay
         )
     result = run(candles, detector, score_from=OUT_OF_SAMPLE_BOUNDARY)
     first, last = result.candles[0].time, result.candles[-1].time
-    line = "\t".join(
-        [
-            iso(now),
-            detector.name,
-            f"{len(result.candles)} candles from {iso(first)} to {iso(last)}",
-            summarize(result.score),
-        ]
+    entry = LogEntry(
+        when=iso(now),
+        detector=detector.name,
+        period=f"{len(result.candles)} candles from {iso(first)} to {iso(last)}",
+        score=summarize(result.score),
     )
     with log.open("a") as f:
-        f.write(line + "\n")
+        f.write(entry.line() + "\n")
     return result

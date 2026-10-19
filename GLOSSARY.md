@@ -115,8 +115,8 @@ A candle whose low is below the previous candle's low.
 _Avoid_: LL, down bar, swing low
 
 **Run**:
-Consecutive higher highs, or consecutive lower lows, ending at a given candle. The first later candle that does not extend it fails the run.
-_Avoid_: streak, sequence, impulse, leg
+Consecutive higher highs, or consecutive lower lows, ending at a given candle. An equal high or low ends the run; a later candle whose high falls short of the previous high, or whose low stays above the previous low, fails it.
+_Avoid_: streak, impulse, leg
 
 **Detector one**:
 The first candidate detector: a mark inside a zone on the candle that fails a run of at least three higher highs (a top) or lower lows (a bottom).

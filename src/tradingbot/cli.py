@@ -7,14 +7,16 @@ import argparse
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
+from tradingbot import out_of_sample
 from tradingbot.candles import iso
-from tradingbot.detectors import DETECTORS
+from tradingbot.detectors import DETECTORS, Detector
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY, read_development
 from tradingbot.kraken import KrakenSpot
-from tradingbot.out_of_sample import DEFAULT_LOG, Refused, check
 from tradingbot.replay import ReplayResult, run
+from tradingbot.scoring import describe_score
 from tradingbot.store import CandleStore
 from tradingbot.sync import catch_up, import_archive
 
@@ -58,31 +60,22 @@ def run_serve(db: Path, host: str, port: int) -> None:
     uvicorn.run(create_app(db), host=host, port=port)
 
 
-def describe_score(result: ReplayResult, period: str) -> str:
+def report(result: ReplayResult, period: str) -> str:
     """The score as the batch commands print it; `period` names what was replayed."""
-    score = result.score
     first, last = result.candles[0].time, result.candles[-1].time
-    if score.median_timing is None or score.median_give_up is None:
-        timing = give_up = "n/a (no hits)"
-    else:
-        early_or_late = (
-            "early" if score.median_timing < 0 else "late" if score.median_timing > 0 else "on time"
-        )
-        timing = f"{score.median_timing:+.1f} candles ({early_or_late})"
-        give_up = f"{score.median_give_up:.2f}%"
-    return "\n".join(
-        [
-            f"Replayed {result.detector} {period}: {len(result.candles)} "
-            f"candles from {iso(first)} to {iso(last)}.",
-            f"  turning points   {score.turning_points}",
-            f"  marks            {score.marks}",
-            f"  hits             {score.hits}  (hit rate {score.hit_rate:.1%})",
-            f"  false marks      {score.false_marks}  "
-            f"(false-mark rate {score.false_mark_rate:.1%})",
-            f"  median timing    {timing}",
-            f"  median give-up   {give_up}",
-        ]
+    heading = (
+        f"Replayed {result.detector} {period}: {len(result.candles)} "
+        f"candles from {iso(first)} to {iso(last)}."
     )
+    lines = [f"  {label:<16} {value}" for label, value in describe_score(result.score)]
+    return "\n".join([heading, *lines])
+
+
+def detector_named(name: str) -> Callable[[], Detector]:
+    build = DETECTORS.get(name)
+    if build is None:
+        sys.exit(f"Unknown detector {name!r}. Known detectors: {', '.join(DETECTORS)}.")
+    return build
 
 
 def write_chart_data(result: ReplayResult, out: Path) -> None:
@@ -94,9 +87,7 @@ def write_chart_data(result: ReplayResult, out: Path) -> None:
 
 
 def run_replay(db: Path, detector: str, out: Path | None) -> None:
-    build = DETECTORS.get(detector)
-    if build is None:
-        sys.exit(f"Unknown detector {detector!r}. Known detectors: {', '.join(DETECTORS)}.")
+    build = detector_named(detector)
     with CandleStore(db) as store:
         candles = read_development(store)
     if not candles:
@@ -105,20 +96,19 @@ def run_replay(db: Path, detector: str, out: Path | None) -> None:
             f"{iso(OUT_OF_SAMPLE_BOUNDARY)}. Import an archive that covers it."
         )
     result = run(candles, build())
-    print(describe_score(result, "over the development period"))
+    print(report(result, "over the development period"))
     write_chart_data(result, out or db.parent / f"replay-{detector}.json")
 
 
-def run_out_of_sample(db: Path, detector: str, log: Path, out: Path | None) -> None:
-    build = DETECTORS.get(detector)
-    if build is None:
-        sys.exit(f"Unknown detector {detector!r}. Known detectors: {', '.join(DETECTORS)}.")
+def run_out_of_sample(db: Path, detector: str, out: Path | None) -> None:
+    build = detector_named(detector)
+    log = Path(out_of_sample.DEFAULT_LOG)
     try:
         with CandleStore(db) as store:
-            result = check(store, build(), log, now=int(time.time()))
-    except Refused as refused:
+            result = out_of_sample.check(store, build(), log, now=int(time.time()))
+    except out_of_sample.Refused as refused:
         sys.exit(str(refused))
-    print(describe_score(result, "out of sample"))
+    print(report(result, "out of sample"))
     print(f"Logged this run in {log}.")
     write_chart_data(result, out or db.parent / f"out-of-sample-{detector}.json")
 
@@ -162,15 +152,12 @@ def build_parser() -> argparse.ArgumentParser:
     checker = commands.add_parser(
         "out-of-sample",
         parents=[common],
-        help="the one out-of-sample run a detector gets: score it past the boundary, log the run",
+        help=(
+            "the one out-of-sample run a detector gets: score it past the boundary and log the "
+            f"run in {out_of_sample.DEFAULT_LOG} in the working directory"
+        ),
     )
     checker.add_argument("detector", help=f"detector name: {', '.join(DETECTORS)}")
-    checker.add_argument(
-        "--log",
-        type=Path,
-        default=Path(DEFAULT_LOG),
-        help=f"file that records every out-of-sample run (default: {DEFAULT_LOG})",
-    )
     checker.add_argument(
         "--out",
         type=Path,
@@ -195,4 +182,4 @@ def main(argv: list[str] | None = None) -> None:
         case "replay":
             run_replay(args.db, args.detector, args.out)
         case "out-of-sample":
-            run_out_of_sample(args.db, args.detector, args.log, args.out)
+            run_out_of_sample(args.db, args.detector, args.out)

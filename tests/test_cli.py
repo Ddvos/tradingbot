@@ -156,18 +156,19 @@ def store_across_the_boundary(path: Path) -> Path:
 
 
 def test_out_of_sample_scores_only_the_candles_past_the_boundary_and_logs_the_run(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)  # the log lands in the working directory
     db = store_across_the_boundary(tmp_path)
     log = tmp_path / "out-of-sample.log"
     out = tmp_path / "out-of-sample-floor.json"
 
-    main(["out-of-sample", "floor", "--db", str(db), "--log", str(log), "--out", str(out)])
+    main(["out-of-sample", "floor", "--db", str(db), "--out", str(out)])
 
     printed = capsys.readouterr().out
     assert "Replayed floor out of sample: 300 candles from 2024-10-19T00:00:00Z" in printed
     assert "hit rate" in printed and "false-mark rate" in printed
-    assert str(log) in printed
+    assert "out-of-sample.log" in printed
     data = json.loads(out.read_text())
     assert data["detector"] == "floor"
     assert all(c["time"] >= OUT_OF_SAMPLE_BOUNDARY for c in data["candles"])
@@ -179,30 +180,33 @@ def test_out_of_sample_scores_only_the_candles_past_the_boundary_and_logs_the_ru
 
 
 def test_out_of_sample_refuses_a_second_run_for_the_same_detector(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     db = store_across_the_boundary(tmp_path)
     log = tmp_path / "out-of-sample.log"
     out = tmp_path / "out-of-sample-floor.json"
-    main(["out-of-sample", "floor", "--db", str(db), "--log", str(log), "--out", str(out)])
+    main(["out-of-sample", "floor", "--db", str(db), "--out", str(out)])
     capsys.readouterr()
     logged = log.read_text()
     out.unlink()
 
     with pytest.raises(SystemExit) as stopped:
-        main(["out-of-sample", "floor", "--db", str(db), "--log", str(log), "--out", str(out)])
+        main(["out-of-sample", "floor", "--db", str(db), "--out", str(out)])
 
     assert "floor" in str(stopped.value) and "already" in str(stopped.value)
     assert log.read_text() == logged
     assert not out.exists()
 
 
-def test_out_of_sample_stops_when_the_store_ends_before_the_boundary(tmp_path: Path) -> None:
+def test_out_of_sample_stops_when_the_store_ends_before_the_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     db = sixteen_hours_db(tmp_path)
-    log = tmp_path / "out-of-sample.log"
 
     with pytest.raises(SystemExit) as stopped:
-        main(["out-of-sample", "floor", "--db", str(db), "--log", str(log)])
+        main(["out-of-sample", "floor", "--db", str(db)])
 
     assert "out of sample" in str(stopped.value)
-    assert not log.exists()
+    assert not (tmp_path / "out-of-sample.log").exists()

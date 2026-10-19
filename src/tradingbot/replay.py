@@ -118,8 +118,8 @@ def run(
         index = {candle.time: i for i, candle in enumerate(candles)}
         marks = [m for m in marks if m.time >= score_from]
         points = [p for p in points if p.time >= score_from]
-        # A candle before the cut that can still become a turning point counts
-        # as the first kept candle: nothing earlier exists in this series.
+        # A candle before `score_from` that can still become a turning point
+        # counts as the first kept candle: nothing earlier exists in this series.
         pending_index = [max(i - first, 0) for i in pending_index[first:]]
     outcome = match_marks(candles, marks, points, tolerance)
     hits = {hit.mark.time: hit for hit in outcome.hits}

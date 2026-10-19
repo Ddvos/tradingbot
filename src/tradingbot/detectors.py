@@ -91,8 +91,9 @@ ZONE = 0.01
 """Detector one's zone, fixed in slice 3 (#12): within 1% of a level."""
 
 
-def near_level(price: float, levels: Sequence[float], zone: float = ZONE) -> bool:
-    """Whether `price` lies within `zone` of any level, as a fraction of that level.
+def in_zone(price: float, levels: Sequence[float]) -> bool:
+    """Whether `price` lies in the zone of any level: within `ZONE` of it, as a
+    fraction of that level.
 
     `levels` must be sorted ascending. Only the nearest level below and the
     nearest level above the price can put it in a zone, so those two are
@@ -100,11 +101,11 @@ def near_level(price: float, levels: Sequence[float], zone: float = ZONE) -> boo
     """
     i = bisect_left(levels, price)
     nearest = levels[max(i - 1, 0) : i + 1]
-    return any(abs(price - level) / level <= zone for level in nearest)
+    return any(abs(price - level) / level <= ZONE for level in nearest)
 
 
-def higher_highs(candles: Sequence[Candle], ending_at: int) -> int:
-    """How many consecutive higher highs end at `candles[ending_at]`.
+def run_of_higher_highs(candles: Sequence[Candle], ending_at: int) -> int:
+    """The length of the run of higher highs ending at `candles[ending_at]`.
 
     A higher high is a candle whose high is above the previous candle's high.
     The run is counted backwards from `candles[ending_at]` and stops at the
@@ -119,8 +120,8 @@ def higher_highs(candles: Sequence[Candle], ending_at: int) -> int:
     return count
 
 
-def lower_lows(candles: Sequence[Candle], ending_at: int) -> int:
-    """How many consecutive lower lows end at `candles[ending_at]`: the mirror of `higher_highs`."""
+def run_of_lower_lows(candles: Sequence[Candle], ending_at: int) -> int:
+    """The length of the run of lower lows ending at `candles[ending_at]`: the mirror image."""
     count = 0
     while ending_at - count > 0 and (
         candles[ending_at - count].low < candles[ending_at - count - 1].low
@@ -147,9 +148,7 @@ class DetectorOne:
 
     name = "one"
 
-    def __init__(self, zone: float = ZONE, run_length: int = RUN_LENGTH) -> None:
-        self._zone = zone
-        self._run_length = run_length
+    def __init__(self) -> None:
         self._prices: list[float] = []
         """The levels' prices, sorted ascending, grown as turning points are confirmed."""
 
@@ -159,17 +158,13 @@ class DetectorOne:
         if len(candles) < 2:
             return None
         latest, previous = candles[-1], candles[-2]
-        before = len(candles) - 2
-        failed_higher_high = latest.high < previous.high and near_level(
-            latest.high, self._prices, self._zone
-        )
-        failed_lower_low = latest.low > previous.low and near_level(
-            latest.low, self._prices, self._zone
-        )
-        top_run = higher_highs(candles, before) if failed_higher_high else 0
-        bottom_run = lower_lows(candles, before) if failed_lower_low else 0
-        top_due = top_run >= self._run_length
-        bottom_due = bottom_run >= self._run_length
+        previous_index = len(candles) - 2
+        failed_higher_high = latest.high < previous.high and in_zone(latest.high, self._prices)
+        failed_lower_low = latest.low > previous.low and in_zone(latest.low, self._prices)
+        top_run = run_of_higher_highs(candles, previous_index) if failed_higher_high else 0
+        bottom_run = run_of_lower_lows(candles, previous_index) if failed_lower_low else 0
+        top_due = top_run >= RUN_LENGTH
+        bottom_due = bottom_run >= RUN_LENGTH
         # Both at once is an inside candle after expanding ranges: the longer run
         # wins, and equal runs cancel out, since a candle gets at most one mark.
         if top_due and (not bottom_due or top_run > bottom_run):

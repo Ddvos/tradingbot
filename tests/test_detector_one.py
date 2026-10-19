@@ -5,36 +5,36 @@ from tradingbot.detectors import (
     DETECTORS,
     DetectorOne,
     Mark,
-    higher_highs,
-    lower_lows,
-    near_level,
+    in_zone,
+    run_of_higher_highs,
+    run_of_lower_lows,
 )
 from tradingbot.turning_points import Kind, TurningPoint
 
 
 def test_a_price_within_one_percent_of_a_level_is_in_its_zone() -> None:
-    assert near_level(100.5, [100.0])
-    assert near_level(99.5, [100.0])
-    assert near_level(101.0, [100.0])  # exactly 1% above: still inside
-    assert near_level(99.0, [100.0])  # exactly 1% below: still inside
+    assert in_zone(100.5, [100.0])
+    assert in_zone(99.5, [100.0])
+    assert in_zone(101.0, [100.0])  # exactly 1% above: still inside
+    assert in_zone(99.0, [100.0])  # exactly 1% below: still inside
 
 
 def test_a_price_more_than_one_percent_from_every_level_is_outside_every_zone() -> None:
-    assert not near_level(101.1, [100.0])
-    assert not near_level(98.9, [100.0])
-    assert not near_level(100.0, [])
+    assert not in_zone(101.1, [100.0])
+    assert not in_zone(98.9, [100.0])
+    assert not in_zone(100.0, [])
 
 
 def test_the_zone_is_measured_as_a_fraction_of_the_level() -> None:
-    assert near_level(1010.0, [1000.0])
-    assert not near_level(1010.1, [1000.0])
+    assert in_zone(1010.0, [1000.0])
+    assert not in_zone(1010.1, [1000.0])
 
 
 def test_any_level_can_put_a_price_in_a_zone() -> None:
     levels = [50.0, 100.0, 200.0]  # sorted ascending, as the detector keeps them
-    assert near_level(199.0, levels)
-    assert near_level(50.4, levels)
-    assert not near_level(150.0, levels)
+    assert in_zone(199.0, levels)
+    assert in_zone(50.4, levels)
+    assert not in_zone(150.0, levels)
 
 
 H = 3600
@@ -54,11 +54,11 @@ def test_a_run_of_higher_highs_counts_the_candles_whose_high_beat_the_candle_bef
         candle(4, high=103.0, low=90.0, close=95.0),  # higher high: a new run of one
     ]
 
-    assert higher_highs(candles, ending_at=0) == 0  # the first candle has nothing to beat
-    assert higher_highs(candles, ending_at=1) == 1
-    assert higher_highs(candles, ending_at=2) == 2
-    assert higher_highs(candles, ending_at=3) == 0
-    assert higher_highs(candles, ending_at=4) == 1
+    assert run_of_higher_highs(candles, ending_at=0) == 0  # the first candle has nothing to beat
+    assert run_of_higher_highs(candles, ending_at=1) == 1
+    assert run_of_higher_highs(candles, ending_at=2) == 2
+    assert run_of_higher_highs(candles, ending_at=3) == 0
+    assert run_of_higher_highs(candles, ending_at=4) == 1
 
 
 def test_a_run_of_lower_lows_is_the_mirror_image() -> None:
@@ -70,8 +70,8 @@ def test_a_run_of_lower_lows_is_the_mirror_image() -> None:
         candle(4, high=110.0, low=97.5, close=105.0),  # not a lower low
     ]
 
-    assert lower_lows(candles, ending_at=3) == 3
-    assert lower_lows(candles, ending_at=4) == 0
+    assert run_of_lower_lows(candles, ending_at=3) == 3
+    assert run_of_lower_lows(candles, ending_at=4) == 0
 
 
 def level(kind: Kind, price: float) -> TurningPoint:
