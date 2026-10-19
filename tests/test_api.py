@@ -232,6 +232,27 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
         "median_timing": None,
         "median_give_up": None,
     }
+    assert body["levels"] == []  # the floor reads no levels
+
+
+def test_a_replay_answers_the_levels_the_detector_read_with_their_spans(
+    harness_client: TestClient,
+) -> None:
+    body = harness_client.get("/replay", params={"detector": "two"}).json()
+
+    assert body["detector"] == "two"
+    assert body["levels"][0] == {
+        "kind": "bottom",
+        "price": body["turning_points"][0]["price"],
+        "time": DAY_START + 3 * H,
+        "active_from": body["turning_points"][0]["confirmed_at"],
+        "active_until": DAY_START + 3 * H + 30 * 24 * H,
+    }
+    assert [level["time"] for level in body["levels"]] == [
+        p["time"] for p in body["turning_points"]
+    ]
+    one = harness_client.get("/replay", params={"detector": "one"}).json()
+    assert [level["active_until"] for level in one["levels"]] == [None, None, None]
 
 
 def test_an_unknown_detector_is_rejected(harness_client: TestClient) -> None:

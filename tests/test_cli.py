@@ -93,7 +93,7 @@ def test_replay_prints_the_floor_score_and_writes_the_chart_data(
     assert out.exists()
     data = json.loads(out.read_text())
     assert data["detector"] == "floor"
-    assert set(data) == {"detector", "candles", "turning_points", "marks", "score"}
+    assert set(data) == {"detector", "candles", "turning_points", "levels", "marks", "score"}
 
 
 def test_replay_prints_the_same_score_run_after_run(
@@ -136,6 +136,20 @@ def test_replay_knows_detector_one(tmp_path: Path, capsys: pytest.CaptureFixture
 
     assert "Replayed one over the development period" in capsys.readouterr().out
     assert json.loads(out.read_text())["detector"] == "one"
+
+
+def test_replay_knows_detector_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    db = sixteen_hours_db(tmp_path)
+    out = tmp_path / "replay-two.json"
+
+    main(["replay", "two", "--db", str(db), "--out", str(out)])
+
+    assert "Replayed two over the development period" in capsys.readouterr().out
+    data = json.loads(out.read_text())
+    assert data["detector"] == "two"
+    assert [level["time"] for level in data["levels"]] == [
+        p["time"] for p in data["turning_points"]
+    ]
 
 
 def store_across_the_boundary(path: Path) -> Path:

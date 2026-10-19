@@ -12,7 +12,7 @@
 		type Timeframe,
 		type TurningPoint
 	} from '#lib/api.ts';
-	import type { ChartMark } from '#lib/chart.ts';
+	import type { ChartLevel, ChartMark } from '#lib/chart.ts';
 
 	type Mode = 'hindsight' | 'replay';
 	const SPEEDS = [1, 10, 100, 1000];
@@ -69,6 +69,14 @@
 	/** Start time of the latest shown candle; nothing later than this is visible. */
 	const now = $derived(replay && cursor > 0 ? replay.candles[cursor - 1].time : -Infinity);
 	const shownPoints = $derived(replay ? replay.turning_points.filter((p) => p.confirmed_at <= now) : []);
+	/** The levels the detector sees at the latest shown candle, drawn up to that candle. */
+	const shownLevels = $derived<ChartLevel[]>(
+		replay
+			? replay.levels
+					.filter((l) => l.active_from <= now && (l.active_until === null || now <= l.active_until))
+					.map((l) => ({ kind: l.kind, time: l.time, price: l.price, from: l.active_from, to: now }))
+			: []
+	);
 	const shownMarks = $derived<ChartMark[]>(
 		replay
 			? replay.marks
@@ -232,8 +240,8 @@
 				{:else}
 					Candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
 						? `, ${utc(now)}`
-						: ''}: {shownPoints.length} turning points confirmed, {shownMarks.length} marks placed,
-					{tally.hits} hits, {tally.false} false, {tally.pending} pending
+						: ''}: {shownPoints.length} turning points confirmed, {shownLevels.length} levels active,
+					{shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending
 				{/if}
 			{/if}
 		</p>
@@ -250,14 +258,16 @@
 			candles={replay?.candles ?? []}
 			visible={cursor}
 			turningPoints={shownPoints}
+			levels={shownLevels}
 			marks={shownMarks}
 		/>
 	{/if}
 	<p class="legend">
-		<span class="dot"></span> turning point (8% reversal, in hindsight) · <span class="arrow"
-			>▼</span
-		> top mark · <span class="arrow">▲</span> bottom mark · <span class="pending">grey</span> pending
-		· <span class="hit">green</span> hit · <span class="false">red</span> false mark
+		<span class="dot"></span> turning point (8% reversal, in hindsight) · <span class="level"
+			>orange line</span
+		> level the detector sees (zone within 1%) · <span class="arrow">▼</span> top mark ·
+		<span class="arrow">▲</span> bottom mark · <span class="pending">grey</span> pending ·
+		<span class="hit">green</span> hit · <span class="false">red</span> false mark
 	</p>
 </main>
 
@@ -353,6 +363,9 @@
 	}
 	.arrow {
 		color: #444;
+	}
+	.level {
+		color: #ff9800;
 	}
 	.pending {
 		color: #9e9e9e;

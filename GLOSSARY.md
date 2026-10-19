@@ -99,7 +99,7 @@ The reference detector every candidate must beat: it marks a top on the first ca
 _Avoid_: baseline, benchmark, naive detector
 
 **Level**:
-The price of an earlier top or bottom, where the market may turn again.
+The price of a recent top or bottom, where the market may turn again. A level counts only until a set age; after that it is forgotten.
 _Avoid_: support, resistance, key level, S/R
 
 **Zone**:
@@ -121,6 +121,10 @@ _Avoid_: streak, impulse, leg
 **Detector one**:
 The first candidate detector: a mark inside a zone on the candle that fails a run of at least three higher highs (a top) or lower lows (a bottom).
 _Avoid_: the detector, v1, the levels detector
+
+**Detector two**:
+The second iteration of detector one's family: detector one's rule with levels that expire.
+_Avoid_: v2, the expiring detector, one with expiry
 
 **Replay**:
 Feeding stored candles to a detector one at a time in time order, so that at every step nothing later is visible.
@@ -161,6 +165,14 @@ _Avoid_: simulation, replay
 **Success criterion**:
 The pass/fail rule a detector or strategy must meet, written down before its replay or backtest runs.
 _Avoid_: gate, target, hypothesis
+
+**Family**:
+The detectors that test one hypothesis, each a new iteration of the last. A family gets one out-of-sample check in all, and is dropped when it fails it.
+_Avoid_: lineage, version line, series
+
+**Iteration**:
+One pre-registered rule of a family, written down with its success criterion before its single development run. A fail leads to the next iteration, never to an adjusted rerun.
+_Avoid_: version, attempt, tweak, v2
 
 **Out-of-sample check**:
 A replay or backtest over a period that was never looked at while designing or tuning the detector or strategy.

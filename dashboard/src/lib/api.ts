@@ -26,6 +26,18 @@ export interface TurningPoint {
 	confirmed_at: number;
 }
 
+/** A level as the detector read it, with the span of candles that saw it. */
+export interface Level {
+	kind: Kind;
+	price: number;
+	/** Start time of the turning point's candle. */
+	time: number;
+	/** Start time of the candle that confirmed the turning point: the first to see the level. */
+	active_from: number;
+	/** Start time of the last candle that sees the level; null when it never expires. */
+	active_until: number | null;
+}
+
 /** A detector's mark and what became of it. */
 export interface MarkOutcome {
 	kind: Kind;
@@ -59,11 +71,13 @@ export interface Replay {
 	/** The hourly candles of the development period, oldest first. */
 	candles: Candle[];
 	turning_points: TurningPoint[];
+	/** The levels the detector read; empty for a detector that reads none. */
+	levels: Level[];
 	marks: MarkOutcome[];
 	score: Score;
 }
 
-export const DETECTORS = ['floor', 'one'];
+export const DETECTORS = ['floor', 'one', 'two'];
 
 // Declared in src/env.ts; set PUBLIC_API_URL in dashboard/.env to read from somewhere else.
 const API_URL = PUBLIC_API_URL;
@@ -90,7 +104,7 @@ export async function fetchTurningPoints(timeframe: Timeframe): Promise<TurningP
 	return body.turning_points;
 }
 
-/** The development period replayed through a detector: candles, marks, outcomes, score. */
+/** The development period replayed through a detector: candles, levels, marks, outcomes, score. */
 export async function fetchReplay(detector: string): Promise<Replay> {
 	return get<Replay>(`/replay?detector=${encodeURIComponent(detector)}`);
 }

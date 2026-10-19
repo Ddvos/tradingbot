@@ -13,7 +13,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
 from tradingbot.candles import Candle
-from tradingbot.detectors import Detector, Mark
+from tradingbot.detectors import Detector, Level, Mark
 from tradingbot.scoring import TOLERANCE, Score, Tolerance, match_marks, score
 from tradingbot.turning_points import Kind, TurningPoint, TurningPointFinder
 
@@ -68,6 +68,8 @@ class ReplayResult:
     detector: str
     candles: list[Candle]
     turning_points: list[TurningPoint]
+    levels: list[Level]
+    """The levels the detector read, with the candles that saw them; what the chart draws."""
     marks: list[MarkOutcome]
     score: Score
 
@@ -101,7 +103,8 @@ def run(
     With `score_from`, the detector and the turning-point finder still see
     every candle, so the levels carry over, but only the candles, marks and
     turning points from that time on are kept, and they are scored among
-    themselves as a series of their own. The out-of-sample check uses this.
+    themselves as a series of their own; of the levels, those still seen by a
+    kept candle. The out-of-sample check uses this.
     """
     index = {candle.time: i for i, candle in enumerate(candles)}
     marks: list[Mark] = []
@@ -112,12 +115,14 @@ def run(
             marks.append(step.mark)
         points.extend(step.confirmed)
         pending_index.append(index[step.pending_from])
+    levels = detector.levels(points)
     if score_from is not None:
         first = bisect_left(candles, score_from, key=lambda c: c.time)
         candles = candles[first:]
         index = {candle.time: i for i, candle in enumerate(candles)}
         marks = [m for m in marks if m.time >= score_from]
         points = [p for p in points if p.time >= score_from]
+        levels = [lv for lv in levels if lv.active_until is None or lv.active_until >= score_from]
         # A candle before `score_from` that can still become a turning point
         # counts as the first kept candle: nothing earlier exists in this series.
         pending_index = [max(i - first, 0) for i in pending_index[first:]]
@@ -139,4 +144,4 @@ def run(
                 settled_at=candles[settled].time,
             )
         )
-    return ReplayResult(detector.name, list(candles), points, outcomes, score(outcome))
+    return ReplayResult(detector.name, list(candles), points, levels, outcomes, score(outcome))

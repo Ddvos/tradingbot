@@ -6,7 +6,7 @@ from collections.abc import Sequence
 import pytest
 
 from tradingbot.candles import Candle
-from tradingbot.detectors import FloorDetector, Mark
+from tradingbot.detectors import LEVEL_LIFETIME, DetectorTwo, FloorDetector, Level, Mark
 from tradingbot.replay import ReplayResult, replay, run
 from tradingbot.scoring import match_marks
 from tradingbot.turning_points import Kind, TurningPoint, find_turning_points
@@ -42,6 +42,9 @@ class Spy:
         self.candles_seen.append(tuple(candles))
         self.levels_seen.append(tuple(levels))
         return Kind.TOP
+
+    def levels(self, points: Sequence[TurningPoint]) -> list[Level]:
+        return []
 
 
 def test_each_step_places_the_mark_on_the_latest_candle_at_its_close() -> None:
@@ -191,6 +194,37 @@ def test_marks_scored_from_a_time_are_settled_by_a_kept_candle() -> None:
     for outcome in result.marks:
         assert outcome.settled_at in kept
         assert outcome.settled_at >= outcome.time
+
+
+def test_a_run_carries_the_levels_the_detector_read_with_their_spans() -> None:
+    candles = random_walk(hours=2000, seed=12)
+
+    result = run(candles, DetectorTwo())
+
+    assert result.levels, "the series should hold turning points"
+    assert result.levels == [
+        Level(p.kind, p.price, p.time, p.confirmed_at, p.time + LEVEL_LIFETIME)
+        for p in result.turning_points
+    ]
+    assert run(candles, FloorDetector()).levels == []
+    assert run(candles, Spy()).levels == []
+
+
+def test_scoring_from_a_time_keeps_the_levels_still_seen_from_then_on() -> None:
+    candles = random_walk(hours=2000, seed=12)
+    boundary = T0 + 1500 * H
+
+    whole = run(candles, DetectorTwo())
+    kept = run(candles, DetectorTwo(), score_from=boundary)
+
+    assert kept.levels == [
+        level
+        for level in whole.levels
+        if level.active_until is not None and level.active_until >= boundary
+    ]
+    assert any(level.time < boundary for level in kept.levels), (
+        "a level from before the boundary that is still seen after it is kept"
+    )
 
 
 def test_scoring_from_before_the_first_candle_changes_nothing() -> None:
