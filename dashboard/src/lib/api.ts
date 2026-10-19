@@ -63,7 +63,7 @@ export interface Replay {
 	score: Score;
 }
 
-export const DETECTORS = ['floor'];
+export const DETECTORS = ['floor', 'one'];
 
 // Declared in src/env.ts; set PUBLIC_API_URL in dashboard/.env to read from somewhere else.
 const API_URL = PUBLIC_API_URL;

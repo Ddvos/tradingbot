@@ -149,3 +149,51 @@ def test_a_mark_in_a_flat_market_is_settled_only_by_the_last_candle() -> None:
     result = run(flat, Spy())
 
     assert result.marks[0].settled_at == T0 + 99 * H
+
+
+def test_scoring_from_a_time_keeps_the_candles_marks_and_turning_points_from_then_on() -> None:
+    candles = random_walk(hours=2000, seed=9)
+    boundary = T0 + 1500 * H
+    spy = Spy()
+
+    result = run(candles, spy, score_from=boundary)
+
+    assert [c.time for c in result.candles] == [c.time for c in candles if c.time >= boundary]
+    assert [m.time for m in result.marks] == [c.time for c in candles if c.time >= boundary]
+    assert all(p.time >= boundary for p in result.turning_points)
+    assert result.score.marks == 500
+    assert result.score.turning_points == len(
+        [p for p in find_turning_points(candles) if p.time >= boundary]
+    )
+    assert result.score.turning_points > 3
+
+
+def test_the_detector_still_sees_every_candle_before_the_scored_time() -> None:
+    candles = random_walk(hours=2000, seed=9)
+    boundary = T0 + 1500 * H
+    spy = Spy()
+
+    run(candles, spy, score_from=boundary)
+
+    assert spy.candles_seen[0] == (candles[0],)
+    assert spy.candles_seen[-1] == tuple(candles)
+    assert len(spy.levels_seen[-1]) == len(find_turning_points(candles))
+
+
+def test_marks_scored_from_a_time_are_settled_by_a_kept_candle() -> None:
+    candles = random_walk(hours=2000, seed=10)
+    boundary = T0 + 1500 * H
+
+    result = run(candles, FloorDetector(), score_from=boundary)
+
+    kept = {c.time for c in result.candles}
+    assert result.marks, "the floor should place marks past the boundary"
+    for outcome in result.marks:
+        assert outcome.settled_at in kept
+        assert outcome.settled_at >= outcome.time
+
+
+def test_scoring_from_before_the_first_candle_changes_nothing() -> None:
+    candles = random_walk(hours=500, seed=11)
+
+    assert run(candles, FloorDetector(), score_from=T0 - H) == run(candles, FloorDetector())

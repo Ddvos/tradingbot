@@ -1,4 +1,5 @@
-"""The `tradingbot` command: import the archive, catch up, serve the API, replay a detector."""
+"""The `tradingbot` command: import the archive, catch up, serve the API, replay a detector,
+run the one out-of-sample check."""
 
 from __future__ import annotations
 
@@ -6,21 +7,18 @@ import argparse
 import os
 import sys
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
+from tradingbot.candles import iso
 from tradingbot.detectors import DETECTORS
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY, read_development
 from tradingbot.kraken import KrakenSpot
+from tradingbot.out_of_sample import DEFAULT_LOG, Refused, check
 from tradingbot.replay import ReplayResult, run
 from tradingbot.store import CandleStore
 from tradingbot.sync import catch_up, import_archive
 
 DEFAULT_DB = "data/candles.sqlite"
-
-
-def iso(seconds: int) -> str:
-    return datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def describe(store: CandleStore) -> str:
@@ -60,7 +58,8 @@ def run_serve(db: Path, host: str, port: int) -> None:
     uvicorn.run(create_app(db), host=host, port=port)
 
 
-def describe_score(result: ReplayResult) -> str:
+def describe_score(result: ReplayResult, period: str) -> str:
+    """The score as the batch commands print it; `period` names what was replayed."""
     score = result.score
     first, last = result.candles[0].time, result.candles[-1].time
     if score.median_timing is None or score.median_give_up is None:
@@ -73,7 +72,7 @@ def describe_score(result: ReplayResult) -> str:
         give_up = f"{score.median_give_up:.2f}%"
     return "\n".join(
         [
-            f"Replayed {result.detector} over the development period: {len(result.candles)} "
+            f"Replayed {result.detector} {period}: {len(result.candles)} "
             f"candles from {iso(first)} to {iso(last)}.",
             f"  turning points   {score.turning_points}",
             f"  marks            {score.marks}",
@@ -86,9 +85,15 @@ def describe_score(result: ReplayResult) -> str:
     )
 
 
-def run_replay(db: Path, detector: str, out: Path | None) -> None:
+def write_chart_data(result: ReplayResult, out: Path) -> None:
     from tradingbot.api import ReplayOut
 
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(ReplayOut.of(result).model_dump_json())
+    print(f"Wrote the chart data to {out}.")
+
+
+def run_replay(db: Path, detector: str, out: Path | None) -> None:
     build = DETECTORS.get(detector)
     if build is None:
         sys.exit(f"Unknown detector {detector!r}. Known detectors: {', '.join(DETECTORS)}.")
@@ -100,12 +105,22 @@ def run_replay(db: Path, detector: str, out: Path | None) -> None:
             f"{iso(OUT_OF_SAMPLE_BOUNDARY)}. Import an archive that covers it."
         )
     result = run(candles, build())
-    print(describe_score(result))
-    if out is None:
-        out = db.parent / f"replay-{detector}.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(ReplayOut.of(result).model_dump_json())
-    print(f"Wrote the chart data to {out}.")
+    print(describe_score(result, "over the development period"))
+    write_chart_data(result, out or db.parent / f"replay-{detector}.json")
+
+
+def run_out_of_sample(db: Path, detector: str, log: Path, out: Path | None) -> None:
+    build = DETECTORS.get(detector)
+    if build is None:
+        sys.exit(f"Unknown detector {detector!r}. Known detectors: {', '.join(DETECTORS)}.")
+    try:
+        with CandleStore(db) as store:
+            result = check(store, build(), log, now=int(time.time()))
+    except Refused as refused:
+        sys.exit(str(refused))
+    print(describe_score(result, "out of sample"))
+    print(f"Logged this run in {log}.")
+    write_chart_data(result, out or db.parent / f"out-of-sample-{detector}.json")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -144,6 +159,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="JSON file for the chart data (default: replay-<detector>.json next to the store)",
     )
+    checker = commands.add_parser(
+        "out-of-sample",
+        parents=[common],
+        help="the one out-of-sample run a detector gets: score it past the boundary, log the run",
+    )
+    checker.add_argument("detector", help=f"detector name: {', '.join(DETECTORS)}")
+    checker.add_argument(
+        "--log",
+        type=Path,
+        default=Path(DEFAULT_LOG),
+        help=f"file that records every out-of-sample run (default: {DEFAULT_LOG})",
+    )
+    checker.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help=(
+            "JSON file for the chart data "
+            "(default: out-of-sample-<detector>.json next to the store)"
+        ),
+    )
     return parser
 
 
@@ -158,3 +194,5 @@ def main(argv: list[str] | None = None) -> None:
             run_serve(args.db, args.host, args.port)
         case "replay":
             run_replay(args.db, args.detector, args.out)
+        case "out-of-sample":
+            run_out_of_sample(args.db, args.detector, args.log, args.out)

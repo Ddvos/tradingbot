@@ -8,6 +8,7 @@ never on an earlier one.
 
 from __future__ import annotations
 
+from bisect import bisect_left, insort
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -86,5 +87,100 @@ class FloorDetector:
         return None
 
 
-DETECTORS: dict[str, Callable[[], Detector]] = {FloorDetector.name: FloorDetector}
+ZONE = 0.01
+"""Detector one's zone, fixed in slice 3 (#12): within 1% of a level."""
+
+
+def near_level(price: float, levels: Sequence[float], zone: float = ZONE) -> bool:
+    """Whether `price` lies within `zone` of any level, as a fraction of that level.
+
+    `levels` must be sorted ascending. Only the nearest level below and the
+    nearest level above the price can put it in a zone, so those two are
+    checked and the rest is skipped.
+    """
+    i = bisect_left(levels, price)
+    nearest = levels[max(i - 1, 0) : i + 1]
+    return any(abs(price - level) / level <= zone for level in nearest)
+
+
+def higher_highs(candles: Sequence[Candle], ending_at: int) -> int:
+    """How many consecutive higher highs end at `candles[ending_at]`.
+
+    A higher high is a candle whose high is above the previous candle's high.
+    The run is counted backwards from `candles[ending_at]` and stops at the
+    first candle that is not a higher high; the first candle of the series
+    never is, having nothing to beat.
+    """
+    count = 0
+    while ending_at - count > 0 and (
+        candles[ending_at - count].high > candles[ending_at - count - 1].high
+    ):
+        count += 1
+    return count
+
+
+def lower_lows(candles: Sequence[Candle], ending_at: int) -> int:
+    """How many consecutive lower lows end at `candles[ending_at]`: the mirror of `higher_highs`."""
+    count = 0
+    while ending_at - count > 0 and (
+        candles[ending_at - count].low < candles[ending_at - count - 1].low
+    ):
+        count += 1
+    return count
+
+
+RUN_LENGTH = 3
+"""Detector one's run, fixed in slice 3 (#12): at least 3 consecutive higher
+highs (or lower lows) ending at the previous candle."""
+
+
+class DetectorOne:
+    """Detector one: levels plus the first failed higher high or lower low (#12).
+
+    The levels are the prices of every turning point confirmed so far, each
+    usable for tops and for bottoms, never expiring. A top is marked on a candle
+    whose high is in the zone of a level, whose previous candle ends a run of at
+    least three higher highs, and whose own high stays below the previous
+    candle's: the first failed higher high. A bottom is the mirror image on the
+    lows. No mark outside a zone, and nothing but price goes in (ADR-0003).
+    """
+
+    name = "one"
+
+    def __init__(self, zone: float = ZONE, run_length: int = RUN_LENGTH) -> None:
+        self._zone = zone
+        self._run_length = run_length
+        self._prices: list[float] = []
+        """The levels' prices, sorted ascending, grown as turning points are confirmed."""
+
+    def mark(self, candles: Sequence[Candle], levels: Sequence[TurningPoint]) -> Kind | None:
+        while len(self._prices) < len(levels):
+            insort(self._prices, levels[len(self._prices)].price)
+        if len(candles) < 2:
+            return None
+        latest, previous = candles[-1], candles[-2]
+        before = len(candles) - 2
+        failed_higher_high = latest.high < previous.high and near_level(
+            latest.high, self._prices, self._zone
+        )
+        failed_lower_low = latest.low > previous.low and near_level(
+            latest.low, self._prices, self._zone
+        )
+        top_run = higher_highs(candles, before) if failed_higher_high else 0
+        bottom_run = lower_lows(candles, before) if failed_lower_low else 0
+        top_due = top_run >= self._run_length
+        bottom_due = bottom_run >= self._run_length
+        # Both at once is an inside candle after expanding ranges: the longer run
+        # wins, and equal runs cancel out, since a candle gets at most one mark.
+        if top_due and (not bottom_due or top_run > bottom_run):
+            return Kind.TOP
+        if bottom_due and (not top_due or bottom_run > top_run):
+            return Kind.BOTTOM
+        return None
+
+
+DETECTORS: dict[str, Callable[[], Detector]] = {
+    FloorDetector.name: FloorDetector,
+    DetectorOne.name: DetectorOne,
+}
 """Every detector by name; each entry builds a fresh, stateless-at-start instance."""
