@@ -25,6 +25,8 @@ class Step:
     """The mark the detector placed on this candle, if any."""
     confirmed: tuple[TurningPoint, ...]
     """The turning points this candle confirmed: new levels from now on."""
+    pending_from: int
+    """Start time of the earliest candle that can still become a turning point."""
 
 
 def replay(candles: Iterable[Candle], detector: Detector) -> Iterator[Step]:
@@ -42,7 +44,9 @@ def replay(candles: Iterable[Candle], detector: Detector) -> Iterator[Step]:
         levels.extend(confirmed)
         kind = detector.mark(seen, levels)
         mark = Mark(kind, candle.time, candle.close) if kind is not None else None
-        yield Step(candle, mark, tuple(confirmed))
+        pending_from = finder.pending_from
+        assert pending_from is not None  # the finder has seen this candle
+        yield Step(candle, mark, tuple(confirmed), pending_from)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,52 +72,43 @@ class ReplayResult:
     score: Score
 
 
-def settled_index(
-    mark_index: int,
-    candles: Sequence[Candle],
-    points: Sequence[TurningPoint],
-    point_indexes: Sequence[int],
-    index: dict[int, int],
-    tolerance: Tolerance,
-) -> int:
-    """The candle index from which a mark's outcome is certain.
+def settled_index(mark_index: int, pending_index: Sequence[int], tolerance: Tolerance) -> int:
+    """The step from which a mark's outcome is certain.
 
-    Three things can still change it before then: a mark placed later that is
-    nearer to a turning point inside the mark's window (any mark up to two
-    tolerances later), the confirmation of the last turning point inside the
-    window, and the chance that a not yet confirmed extreme inside the window
-    still becomes a turning point, which is over once the next turning point
-    beyond the window has made its extreme. If the series ends first, the
-    outcome is settled by its last candle.
+    Two things can still change it before then: a mark placed later that is
+    nearer to a turning point inside this mark's window (possible until two
+    tolerances after the mark), and a turning point still to be confirmed
+    inside the window (possible until the earliest candle that can still become
+    a turning point lies beyond it). `pending_index` holds, per step, the index
+    of that candle; it never moves backwards. If the series ends first, the
+    outcome is settled by its last step.
     """
-    last = len(candles) - 1
+    last = len(pending_index) - 1
     window_end = mark_index + tolerance.candles
-    settled = mark_index + 2 * tolerance.candles
-    beyond = bisect_right(point_indexes, window_end)
-    if beyond > 0:
-        settled = max(settled, index[points[beyond - 1].confirmed_at])
-    settled = max(settled, point_indexes[beyond] if beyond < len(points) else last)
-    return min(settled, last)
+    competitors_placed = mark_index + 2 * tolerance.candles
+    window_settled = bisect_right(pending_index, window_end)
+    return min(max(competitors_placed, window_settled), last)
 
 
 def run(
     candles: Sequence[Candle], detector: Detector, tolerance: Tolerance = TOLERANCE
 ) -> ReplayResult:
     """Replay the whole series through the detector and score its marks."""
+    index = {candle.time: i for i, candle in enumerate(candles)}
     marks: list[Mark] = []
     points: list[TurningPoint] = []
+    pending_index: list[int] = []
     for step in replay(candles, detector):
         if step.mark is not None:
             marks.append(step.mark)
         points.extend(step.confirmed)
+        pending_index.append(index[step.pending_from])
     outcome = match_marks(candles, marks, points, tolerance)
     hits = {hit.mark.time: hit for hit in outcome.hits}
-    index = {candle.time: i for i, candle in enumerate(candles)}
-    point_indexes = [index[point.time] for point in points]
     outcomes: list[MarkOutcome] = []
     for mark in marks:
         hit = hits.get(mark.time)
-        settled = settled_index(index[mark.time], candles, points, point_indexes, index, tolerance)
+        settled = settled_index(index[mark.time], pending_index, tolerance)
         outcomes.append(
             MarkOutcome(
                 mark.kind,

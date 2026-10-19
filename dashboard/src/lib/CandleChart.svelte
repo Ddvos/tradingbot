@@ -3,17 +3,46 @@
 	import {
 		CandlestickSeries,
 		createChart,
+		createSeriesMarkers,
 		type IChartApi,
 		type ISeriesApi,
+		type ISeriesMarkersPluginApi,
+		type Time,
 		type UTCTimestamp
 	} from 'lightweight-charts';
-	import type { Candle } from '#lib/api.ts';
+	import type { Candle, TurningPoint } from '#lib/api.ts';
+	import { toMarkers, type ChartMark } from '#lib/chart.ts';
 
-	let { candles }: { candles: Candle[] } = $props();
+	let {
+		candles,
+		visible,
+		turningPoints = [],
+		marks = []
+	}: {
+		candles: Candle[];
+		/** How many candles to show, oldest first; all of them when omitted. */
+		visible?: number;
+		turningPoints?: TurningPoint[];
+		marks?: ChartMark[];
+	} = $props();
 
 	let container: HTMLDivElement;
 	let chart: IChartApi | undefined = $state.raw();
 	let series: ISeriesApi<'Candlestick'> | undefined = $state.raw();
+	let markers: ISeriesMarkersPluginApi<Time> | undefined = $state.raw();
+
+	// What the series currently holds, so that one more visible candle is one `update`,
+	// not a full `setData`: replay appends thousands of candles per second.
+	let shownCandles: Candle[] | undefined;
+	let shownCount = 0;
+
+	const toBar = (c: Candle) => ({
+		time: c.time as UTCTimestamp,
+		open: c.open,
+		high: c.high,
+		low: c.low,
+		close: c.close
+	});
 
 	onMount(() => {
 		chart = createChart(container, {
@@ -30,21 +59,28 @@
 			wickUpColor: '#26a69a',
 			wickDownColor: '#ef5350'
 		});
+		markers = createSeriesMarkers(series, []);
 		return () => chart?.remove();
 	});
 
 	$effect(() => {
 		if (!chart || !series) return;
-		series.setData(
-			candles.map((c) => ({
-				time: c.time as UTCTimestamp,
-				open: c.open,
-				high: c.high,
-				low: c.low,
-				close: c.close
-			}))
-		);
-		chart.timeScale().fitContent();
+		const count = Math.min(visible ?? candles.length, candles.length);
+		if (candles !== shownCandles || count < shownCount) {
+			series.setData(candles.slice(0, count).map(toBar));
+			shownCandles = candles;
+			shownCount = count;
+			chart.timeScale().fitContent();
+			return;
+		}
+		for (let i = shownCount; i < count; i++) {
+			series.update(toBar(candles[i]));
+		}
+		shownCount = count;
+	});
+
+	$effect(() => {
+		markers?.setMarkers(toMarkers(turningPoints, marks));
 	});
 </script>
 

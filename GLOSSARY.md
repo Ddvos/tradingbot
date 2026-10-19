@@ -46,6 +46,10 @@ _Avoid_: peak, swing high, resistance
 A turning point at a low: the lowest price before a rise of at least the reversal size.
 _Avoid_: trough, swing low, dip, support
 
+**Confirmed**:
+A turning point is confirmed by the first later candle that completes the reversal size; from that candle on it is known and counts as a level.
+_Avoid_: detected, validated, locked in
+
 **Reversal size**:
 The percentage move against the prevailing direction that, in hindsight, makes the preceding extreme a turning point.
 _Avoid_: threshold, deviation, sensitivity
@@ -81,6 +85,18 @@ _Avoid_: lag, delay, lead
 **Give-up**:
 How far, as a percentage, a hit's close is from its turning point's extreme price.
 _Avoid_: slippage, cost of confirmation
+
+**Score**:
+How a detector did over a period: hit rate, false-mark rate, median timing, median give-up and the raw counts.
+_Avoid_: accuracy, performance, metrics
+
+**Settled**:
+A mark whose outcome, hit or false mark, no later candle can change. Until then the mark is pending.
+_Avoid_: final, resolved, confirmed
+
+**Floor**:
+The reference detector every candidate must beat: it marks a top on the first candle that closes a fixed distance below the highest high since its last bottom mark, and the mirror image for a bottom. It is never a candidate itself.
+_Avoid_: baseline, benchmark, naive detector
 
 **Level**:
 The price of an earlier top or bottom, where the market may turn again.
@@ -133,6 +149,14 @@ _Avoid_: gate, target, hypothesis
 **Out-of-sample check**:
 A replay or backtest over a period that was never looked at while designing or tuning the detector or strategy.
 _Avoid_: holdout, validation, test set
+
+**Out-of-sample boundary**:
+The fixed moment that ends the development period; candles from it on are reserved for out-of-sample checks.
+_Avoid_: cutoff, split date, holdout start
+
+**Development period**:
+The stored history before the out-of-sample boundary: the only candles a detector, a replay or a chart may read while a detector is being designed.
+_Avoid_: training set, in-sample, backtest period
 
 **Paper trading**:
 Running the bot against live market data with simulated orders and a simulated account.

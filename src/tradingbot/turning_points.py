@@ -64,6 +64,21 @@ class TurningPointFinder:
         self._last: Kind | None = None
         """The kind of the last turning point found; None until the first."""
 
+    @property
+    def pending_from(self) -> int | None:
+        """Start time of the earliest candle that can still become a turning point.
+
+        Every candle before it is settled: it either holds a confirmed turning
+        point or never will. None before the first candle.
+        """
+        if self._highest is None or self._lowest is None:
+            return None
+        if self._last is Kind.TOP:
+            return self._lowest.time
+        if self._last is Kind.BOTTOM:
+            return self._highest.time
+        return min(self._highest.time, self._lowest.time)
+
     def push(self, candle: Candle) -> list[TurningPoint]:
         """Take the next candle and answer the turning points it confirms, oldest first.
 

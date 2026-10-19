@@ -126,3 +126,26 @@ def test_a_mark_outcome_is_settled_once_no_later_candle_can_change_it() -> None:
             hit = next((h for h in partial.hits if h.mark.time == outcome.time), None)
             assert (hit is not None) == outcome.hit
             assert (hit.turning_point.time if hit else None) == outcome.turning_point
+
+
+def test_a_mark_in_a_steady_rise_is_settled_two_tolerances_later() -> None:
+    # Every hour makes a new high, so the earliest candle that can still become a
+    # turning point moves on every step; only later competing marks remain to wait for.
+    staircase = [
+        Candle(T0 + h * H, 100 + h, 100.5 + h, 99.5 + h, 100.2 + h, 1.0, 1) for h in range(100)
+    ]
+
+    result = run(staircase, Spy())
+
+    assert result.marks[0].settled_at == T0 + 48 * H
+    assert result.marks[10].settled_at == T0 + 58 * H
+
+
+def test_a_mark_in_a_flat_market_is_settled_only_by_the_last_candle() -> None:
+    # Nothing ever makes a new extreme, so the very first candle can still become a
+    # turning point until the series ends.
+    flat = [Candle(T0 + h * H, 100.0, 100.0, 100.0, 100.0, 1.0, 1) for h in range(100)]
+
+    result = run(flat, Spy())
+
+    assert result.marks[0].settled_at == T0 + 99 * H
