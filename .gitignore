@@ -1,0 +1,38 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Data: the SQLite candle store and the downloaded Kraken archive
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+Kraken_OHLCVT*
+XBTUSD_*.csv
+*.zip
+*.zip.part*
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# JavaScript
+node_modules/
+dashboard/.svelte-kit/
+dashboard/build/
+dashboard/.env
+dashboard/.env.*
+!dashboard/.env.example
+
+# OS and editors
+.DS_Store
+.vscode/
+.idea/
