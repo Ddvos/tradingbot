@@ -72,6 +72,26 @@ class Score:
     """Median give-up of the hits in percent; None without hits."""
 
 
+def describe_score(score: Score) -> list[tuple[str, str]]:
+    """The score as (label, value) pairs, in the order the commands print them."""
+    if score.median_timing is None or score.median_give_up is None:
+        timing = give_up_ = "n/a (no hits)"
+    else:
+        early_or_late = (
+            "early" if score.median_timing < 0 else "late" if score.median_timing > 0 else "on time"
+        )
+        timing = f"{score.median_timing:+.1f} candles ({early_or_late})"
+        give_up_ = f"{score.median_give_up:.2f}%"
+    return [
+        ("turning points", str(score.turning_points)),
+        ("marks", str(score.marks)),
+        ("hits", f"{score.hits}  (hit rate {score.hit_rate:.1%})"),
+        ("false marks", f"{score.false_marks}  (false-mark rate {score.false_mark_rate:.1%})"),
+        ("median timing", timing),
+        ("median give-up", give_up_),
+    ]
+
+
 def give_up(mark: Mark, point: TurningPoint) -> float:
     """Percent from the extreme to the close, positive below a top or above a bottom."""
     away = point.price - mark.price if point.kind is Kind.TOP else mark.price - point.price

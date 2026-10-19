@@ -2,7 +2,7 @@
 
 A bot that finds Bitcoin's turning points on a chart and, once it does that well, trades them with real money on Kraken. The vocabulary is in `GLOSSARY.md`; the decisions are in `docs/adr/`.
 
-Slice 1 put the hourly history of Kraken spot `XBTUSD` in one SQLite file, resampled to 4-hour and daily candles, served by a small API and shown as candlesticks in a dashboard. Slice 2 adds the harness that judges a detector before any detector exists: the true tops and bottoms of the history in hindsight, a replay that hands candles to a detector one hour at a time, the floor detector every candidate must beat, and the score. No trading yet.
+Slice 1 put the hourly history of Kraken spot `XBTUSD` in one SQLite file, resampled to 4-hour and daily candles, served by a small API and shown as candlesticks in a dashboard. Slice 2 added the harness that judges a detector before any detector exists: the true tops and bottoms of the history in hindsight, a replay that hands candles to a detector one hour at a time, the floor detector every candidate must beat, and the score. Slice 3 adds detector one, the first candidate, pre-registered in issue #12 and judged by that harness, and the one explicit command that reads past the out-of-sample boundary. No trading yet.
 
 ## Requirements
 
@@ -70,7 +70,7 @@ One page, two modes. It reads from the API, so start that first.
 
 **Hindsight** shows the whole development period as candlesticks with a 1h / 4h / 1d switch and the true turning points drawn as blue dots on their extremes.
 
-**Replay** hands the hourly candles to a detector one at a time. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from nothing. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in candles) or red (false mark) as soon as no later candle can change it: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's tolerance. Turning points appear as they are confirmed. The line under the controls is the detector's score over the whole development period, the same number the batch command prints.
+**Replay** hands the hourly candles to the chosen detector (`floor` or `one`) one at a time. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from nothing. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in candles) or red (false mark) as soon as no later candle can change it: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's tolerance. Turning points appear as they are confirmed. The line under the controls is the detector's score over the whole development period, the same number the batch command prints.
 
 ## Replay from the command line
 
@@ -78,17 +78,19 @@ One page, two modes. It reads from the API, so start that first.
 uv run tradingbot replay floor
 ```
 
-Replays the development period through the named detector, prints its score and writes the chart data (the same JSON the API answers for `/replay`) to `replay-<detector>.json` next to the store, or to `--out`. The score is identical run to run. Only `floor` exists so far. The output has this shape (the numbers below are made up; the floor has not been scored over the real development period yet):
+Replays the development period through the named detector, prints its score and writes the chart data (the same JSON the API answers for `/replay`) to `replay-<detector>.json` next to the store, or to `--out`. The score is identical run to run. Two detectors exist: `floor`, the reference, and `one`, the first candidate. This is the floor's score over the real development period, recorded on issue #11:
 
 ```
-Replayed floor over the development period: 96000 candles from 2013-10-06T21:00:00Z to 2024-10-18T23:00:00Z.
-  turning points   250
-  marks            1800
-  hits             20  (hit rate 8.0%)
-  false marks      1780  (false-mark rate 98.9%)
-  median timing    +3.0 candles (late)
-  median give-up   1.60%
+Replayed floor over the development period: 85857 candles from 2013-10-06T21:00:00Z to 2024-10-18T23:00:00Z.
+  turning points   1165
+  marks            4463
+  hits             204  (hit rate 17.5%)
+  false marks      4259  (false-mark rate 95.4%)
+  median timing    -2.5 candles (early)
+  median give-up   0.32%
 ```
+
+Detector one's score is not in this file on purpose: issue #12 pre-registers its success criterion, and its one development run and its verdict are recorded as comments there.
 
 ## Definitions fixed in slice 2
 
@@ -105,9 +107,29 @@ These were fixed in issue #11 before any detector was built. Changing any of the
 
 Distances in candles count candles of the hourly series, so a missing hour neither widens nor narrows a tolerance.
 
+## Definitions fixed in slice 3
+
+Fixed in issue #12 before detector one's first run, with the same rule: changing one is a new decision.
+
+| Definition | Value | Where |
+| --- | --- | --- |
+| Level | the price of every turning point confirmed so far, usable for tops and for bottoms alike, never expiring | `detectors.py` |
+| Zone | within 1% of a level, measured on the latest candle's high for a top and its low for a bottom | `detectors.py` |
+| Run | at least 3 consecutive higher highs (or lower lows) ending at the previous candle; a higher high is a candle whose high is above the previous candle's high | `detectors.py` |
+| Detector one | a top on a candle in a zone whose high stays below the previous candle's after a run of higher highs; a bottom is the mirror on the lows; no mark outside a zone. When one candle fails both runs, the longer run wins and equal runs give no mark, since a candle gets at most one mark | `detectors.py` |
+| Out-of-sample check | the whole history replayed, so the detector keeps its levels across the boundary; only candles, marks and turning points from the boundary on are kept and scored among themselves; one run per detector, each run logged | `out_of_sample.py` |
+
 ## The out-of-sample boundary
 
-Development data is every hourly candle before the boundary. Every development entry point, the three API routes and the batch replay, reads through one function that clamps the window to the boundary, so no command can read past it by accident. `import` and `catch-up` still store newer candles; they are kept for the out-of-sample check, which goes through a separate, explicit command that logs each use (slice 3). The local store must hold candles from before the boundary for any of this to show anything: the quarterly archives only reach back to 2026, so the development period comes from the full archive.
+Development data is every hourly candle before the boundary. Every development entry point, the three API routes and the batch replay, reads through one function that clamps the window to the boundary, so no command can read past it by accident. `import` and `catch-up` still store newer candles; they are kept for the out-of-sample check below. The local store must hold candles from before the boundary for any of this to show anything: the quarterly archives only reach back to 2026, so the development period comes from the full archive.
+
+## The out-of-sample check
+
+```sh
+uv run tradingbot out-of-sample one
+```
+
+The one command that reads past the boundary. It replays the whole stored history through the detector, so the detector carries every level it has by the boundary, and scores only the candles from the boundary on, as a series of their own. It prints the score in the same shape as `replay`, writes the chart data to `out-of-sample-<detector>.json` next to the store (or to `--out`), and appends one line to `out-of-sample.log` in the working directory: when it ran, the detector, the period and the score. Run it from the repository root, like every other command, so that file is committed with the code and every run is on record. A detector that is already in the log is refused: the protocol in issue #12 gives each detector one out-of-sample run, and the command runs only after a detector has passed its success criterion over the development period. The API and the dashboard never read past the boundary.
 
 ## Run the checks
 
@@ -129,11 +151,12 @@ src/tradingbot/
   sync.py            archive import and catch-up, the two ways the store is updated
   development.py     the out-of-sample boundary and the only way to read development candles
   turning_points.py  turning points in hindsight, found one candle at a time
-  detectors.py       the Detector interface, Mark, and the floor detector
+  detectors.py       the Detector interface, Mark, the floor detector and detector one
   scoring.py         hits, misses, false marks, timing, give-up and the score
   replay.py          replay: candles to a detector one at a time, then the score
+  out_of_sample.py   the one explicit check past the boundary, logged per run
   api.py             the FastAPI app with GET /candles, /turning-points and /replay
-  cli.py             the tradingbot command: import, catch-up, serve, replay
+  cli.py             the tradingbot command: import, catch-up, serve, replay, out-of-sample
 tests/               pytest suite
 dashboard/           SvelteKit app: hindsight view and replay
 docs/adr/            architecture decision records

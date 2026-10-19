@@ -1,6 +1,8 @@
-"""The command line: `tradingbot import` reports what it stored, `tradingbot replay` the score."""
+"""The command line: `tradingbot import` reports what it stored, `tradingbot replay` and
+`tradingbot out-of-sample` the score."""
 
 import json
+import random
 from pathlib import Path
 
 import pytest
@@ -124,3 +126,87 @@ def test_replay_stops_when_the_store_holds_no_development_candles(tmp_path: Path
 
     assert "development period" in str(stopped.value)
     assert not (tmp_path / "out.json").exists()
+
+
+def test_replay_knows_detector_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    db = sixteen_hours_db(tmp_path)
+    out = tmp_path / "replay-one.json"
+
+    main(["replay", "one", "--db", str(db), "--out", str(out)])
+
+    assert "Replayed one over the development period" in capsys.readouterr().out
+    assert json.loads(out.read_text())["detector"] == "one"
+
+
+def store_across_the_boundary(path: Path) -> Path:
+    """300 hours of a seeded walk before the boundary and 300 after, in a SQLite file."""
+    rng = random.Random(12)
+    close = 1000.0
+    candles: list[Candle] = []
+    for hour in range(-300, 300):
+        open_ = close
+        close = open_ * (1 + rng.uniform(-0.03, 0.03))
+        high = max(open_, close) * (1 + rng.uniform(0, 0.01))
+        low = min(open_, close) * (1 - rng.uniform(0, 0.01))
+        candles.append(Candle(OUT_OF_SAMPLE_BOUNDARY + hour * H, open_, high, low, close, 1.0, 1))
+    db = path / "candles.sqlite"
+    with CandleStore(db) as store:
+        store.upsert(candles)
+    return db
+
+
+def test_out_of_sample_scores_only_the_candles_past_the_boundary_and_logs_the_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # the log lands in the working directory
+    db = store_across_the_boundary(tmp_path)
+    log = tmp_path / "out-of-sample.log"
+    out = tmp_path / "out-of-sample-floor.json"
+
+    main(["out-of-sample", "floor", "--db", str(db), "--out", str(out)])
+
+    printed = capsys.readouterr().out
+    assert "Replayed floor out of sample: 300 candles from 2024-10-19T00:00:00Z" in printed
+    assert "hit rate" in printed and "false-mark rate" in printed
+    assert "out-of-sample.log" in printed
+    data = json.loads(out.read_text())
+    assert data["detector"] == "floor"
+    assert all(c["time"] >= OUT_OF_SAMPLE_BOUNDARY for c in data["candles"])
+    assert all(m["time"] >= OUT_OF_SAMPLE_BOUNDARY for m in data["marks"])
+    lines = log.read_text().splitlines()
+    assert len(lines) == 1
+    assert "\tfloor\t" in lines[0]
+    assert "2024-10-19T00:00:00Z" in lines[0] and "hit rate" in lines[0]
+
+
+def test_out_of_sample_refuses_a_second_run_for_the_same_detector(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    db = store_across_the_boundary(tmp_path)
+    log = tmp_path / "out-of-sample.log"
+    out = tmp_path / "out-of-sample-floor.json"
+    main(["out-of-sample", "floor", "--db", str(db), "--out", str(out)])
+    capsys.readouterr()
+    logged = log.read_text()
+    out.unlink()
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["out-of-sample", "floor", "--db", str(db), "--out", str(out)])
+
+    assert "floor" in str(stopped.value) and "already" in str(stopped.value)
+    assert log.read_text() == logged
+    assert not out.exists()
+
+
+def test_out_of_sample_stops_when_the_store_ends_before_the_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    db = sixteen_hours_db(tmp_path)
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["out-of-sample", "floor", "--db", str(db)])
+
+    assert "out of sample" in str(stopped.value)
+    assert not (tmp_path / "out-of-sample.log").exists()

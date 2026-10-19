@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
+
+
+def iso(seconds: int) -> str:
+    """A candle time as an ISO 8601 date-time in UTC, like 2024-10-19T00:00:00Z."""
+    return datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class Timeframe(Enum):
