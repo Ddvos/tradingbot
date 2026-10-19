@@ -35,13 +35,13 @@ def test_storing_the_same_candles_again_adds_no_rows() -> None:
     assert store.count() == 3
 
 
-def test_read_can_be_limited_to_a_time_window() -> None:
+def test_read_can_be_limited_to_a_time_range() -> None:
     store = CandleStore(":memory:")
     store.upsert(three_hours())
 
-    window = store.read(start=T0 + H, end=T0 + H)
+    in_range = store.read(start=T0 + H, end=T0 + H)
 
-    assert window == [Candle(T0 + H, 105.0, 120.0, 100.0, 115.0, 2.0, 20)]
+    assert in_range == [Candle(T0 + H, 105.0, 120.0, 100.0, 115.0, 2.0, 20)]
 
 
 def test_an_empty_store_has_no_time_range() -> None:

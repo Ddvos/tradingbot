@@ -8,7 +8,6 @@ covers.
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,23 +15,13 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from tradingbot.candles import Timeframe, resample
+from tradingbot.candles import Candle, Timeframe, resample
 from tradingbot.store import CandleStore
-
-
-class CandleOut(BaseModel):
-    time: int
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    trades: int
 
 
 class CandlesOut(BaseModel):
     timeframe: str
-    candles: list[CandleOut]
+    candles: list[Candle]
 
 
 def parse_time(value: str) -> int:
@@ -72,9 +61,6 @@ def create_app(db_path: str | Path) -> FastAPI:
             end += size - 1 - end % size
         with CandleStore(db_path) as store:
             hourly = store.read(start, end)
-        series = hourly if timeframe is Timeframe.H1 else resample(hourly, timeframe)
-        return CandlesOut(
-            timeframe=timeframe.value, candles=[CandleOut(**asdict(c)) for c in series]
-        )
+        return CandlesOut(timeframe=timeframe.value, candles=resample(hourly, timeframe))
 
     return app

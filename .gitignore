@@ -10,6 +10,7 @@ data/
 *.sqlite-wal
 *.sqlite-shm
 Kraken_OHLCVT*
+XBTUSD_*.csv
 *.zip
 *.zip.part*
 

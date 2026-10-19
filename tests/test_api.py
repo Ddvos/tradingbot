@@ -73,7 +73,7 @@ def test_four_hour_candles_are_built_from_the_hourly_ones(client: TestClient) ->
     ]
 
 
-def test_a_window_may_be_given_as_iso_8601_or_unix_seconds(client: TestClient) -> None:
+def test_a_time_range_may_be_given_as_iso_8601_or_unix_seconds(client: TestClient) -> None:
     by_iso = client.get(
         "/candles",
         params={"timeframe": "1h", "from": "2024-01-01T01:00:00Z", "to": "2024-01-01T03:00:00Z"},
@@ -87,7 +87,7 @@ def test_a_window_may_be_given_as_iso_8601_or_unix_seconds(client: TestClient) -
     assert by_seconds == by_iso
 
 
-def test_a_window_inside_a_period_still_yields_the_whole_period(client: TestClient) -> None:
+def test_a_time_range_inside_a_period_still_yields_the_whole_period(client: TestClient) -> None:
     body = client.get(
         "/candles",
         params={"timeframe": "4h", "from": "2024-01-01T01:00:00Z", "to": "2024-01-01T01:00:00Z"},

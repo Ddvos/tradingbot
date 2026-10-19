@@ -8,8 +8,9 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tradingbot.kraken import KrakenSpot, catch_up, import_archive
+from tradingbot.kraken import KrakenSpot
 from tradingbot.store import CandleStore
+from tradingbot.sync import catch_up, import_archive
 
 DEFAULT_DB = "data/candles.sqlite"
 
