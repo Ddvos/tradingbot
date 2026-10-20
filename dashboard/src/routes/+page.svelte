@@ -187,7 +187,9 @@
 	const signed = (candles: number) => (candles > 0 ? `+${candles}` : `${candles}`);
 	/** False marks per hit as the batch command prints them: n/a when marks found no hit. */
 	const perHit = (score: Score) =>
-		score.marks > 0 && score.hits === 0 ? 'n/a per hit' : `${score.false_marks_per_hit.toFixed(1)} per hit`;
+		score.marks > 0 && score.hits === 0
+			? 'n/a (no hits)'
+			: `${score.false_marks_per_hit.toFixed(1)} per hit`;
 
 	function describe(score: Score): string {
 		const timing =

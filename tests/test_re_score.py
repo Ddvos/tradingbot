@@ -61,8 +61,9 @@ def test_re_scoring_replays_the_recorded_candles_and_keeps_the_marks(tmp_path: P
     assert scored.result.candles == recorded.candles
 
 
-RECORDED_THREE = Path("data/replay-three.json")
-"""The recorded run of detector three (#20), kept out of git like all of `data/`."""
+RECORDED_THREE = Path(__file__).resolve().parents[1] / "data" / "replay-three.json"
+"""The recorded run of detector three (#20), kept out of git like all of `data/`; found from
+the repository root whatever the working directory, so the test skips only when it is absent."""
 
 
 @pytest.mark.skipif(not RECORDED_THREE.exists(), reason=f"{RECORDED_THREE} is not on disk")
