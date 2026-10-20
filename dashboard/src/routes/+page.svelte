@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import CandleChart from '#lib/CandleChart.svelte';
 	import {
 		DETECTORS,
@@ -12,12 +14,25 @@
 		type Timeframe,
 		type TurningPoint
 	} from '#lib/api.ts';
-	import { COLORS, toLines, type ChartLine, type ChartMark } from '#lib/chart.ts';
+	import { COLORS, startIndex, toLines, type ChartLine, type ChartMark } from '#lib/chart.ts';
 
 	type Mode = 'hindsight' | 'replay';
 	const SPEEDS = [1, 10, 100, 1000];
+	/** The first stored day and the last development day: the limits of the start-date picker. */
+	const FIRST_DAY = '2013-10-06';
+	const LAST_DAY = '2024-10-18';
+
+	const isDay = (value: string) =>
+		/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
 
 	let mode = $state<Mode>('hindsight');
+	// The start date, a calendar day in UTC as the picker holds it ('' for the first stored
+	// candle), shared by both modes and kept in the page address as `?from=`. It moves where
+	// you start watching, never what a detector reads.
+	const requested = page.url.searchParams.get('from') ?? '';
+	let from = $state(isDay(requested) ? requested : '');
+	/** Midnight UTC of the start date in Unix seconds; null without one. */
+	const fromTime = $derived(from === '' ? null : Date.parse(`${from}T00:00:00Z`) / 1000);
 	let timeframe = $state<Timeframe>('1h');
 	let detector = $state(DETECTORS[0]);
 	let loading = $state(false);
@@ -29,7 +44,7 @@
 
 	// Replay: the candles of the detector's timeframe handed to it one at a time, over the
 	// scoring period. `cursor` is how many candles have been shown; it only ever grows,
-	// except on a restart to zero.
+	// except on a restart or a new start date, which puts it back at `start`.
 	let replay = $state.raw<Replay | null>(null);
 	let cursor = $state(0);
 	let playing = $state(false);
@@ -54,7 +69,7 @@
 				: fetchReplay(detector).then((r) => {
 						if (!current()) return;
 						replay = r;
-						cursor = 0;
+						cursor = start;
 					});
 		load
 			.catch((reason: unknown) => {
@@ -66,17 +81,23 @@
 	});
 
 	const total = $derived(replay?.candles.length ?? 0);
+	/** Hindsight: the candle the view begins at. */
+	const hindsightStart = $derived(startIndex(candles, fromTime));
+	/** Replay: how many candles are shown at the start date, the first one on or after it
+	 * being the next to appear. The detector has read them all: the replay jumps to the date
+	 * with everything up to it shown as it stood then. */
+	const start = $derived(replay ? startIndex(replay.candles, fromTime) : 0);
 	const finished = $derived(replay !== null && cursor >= total);
 	/** Start time of the latest shown candle; nothing later than this is visible. */
 	const now = $derived(replay && cursor > 0 ? replay.candles[cursor - 1].time : -Infinity);
 	const shownPoints = $derived(replay ? replay.turning_points.filter((p) => p.confirmed_at <= now) : []);
 	/** The levels the detector sees at the latest shown candle, drawn up to that candle. */
 	const shownLevels = $derived<ChartLine[]>(
-		replay ? toLines(replay.levels, now, 'level', COLORS.level) : []
+		replay ? toLines(replay.levels, now, COLORS.level) : []
 	);
 	/** The swing extremes the detector reads at the latest shown candle, drawn likewise. */
 	const shownExtremes = $derived<ChartLine[]>(
-		replay ? toLines(replay.swing_extremes, now, 'extreme', COLORS.swingExtreme) : []
+		replay ? toLines(replay.swing_extremes, now, COLORS.swingExtreme) : []
 	);
 	const shownMarks = $derived<ChartMark[]>(
 		replay
@@ -97,11 +118,16 @@
 					}))
 			: []
 	);
+	/** What the status line counts: only what came on or after the start date, so it tells
+	 * what you are watching; the score below stays the whole scoring period's. */
+	const since = (time: number) => fromTime === null || time >= fromTime;
+	const watchedPoints = $derived(shownPoints.filter((p) => since(p.confirmed_at)));
+	const watchedMarks = $derived(shownMarks.filter((m) => since(m.time)));
 	const tally = $derived({
-		hits: shownMarks.filter((m) => m.state === 'hit').length,
-		false: shownMarks.filter((m) => m.state === 'false').length,
-		pending: shownMarks.filter((m) => m.state === 'pending').length,
-		unscored: shownMarks.filter((m) => m.state === 'unscored').length
+		hits: watchedMarks.filter((m) => m.state === 'hit').length,
+		false: watchedMarks.filter((m) => m.state === 'false').length,
+		pending: watchedMarks.filter((m) => m.state === 'pending').length,
+		unscored: watchedMarks.filter((m) => m.state === 'unscored').length
 	});
 
 	let frame: number | undefined;
@@ -143,7 +169,17 @@
 
 	function restart() {
 		pause();
-		cursor = 0;
+		cursor = start;
+	}
+
+	/** A date picked (or cleared): keep it in the page address and start watching there. */
+	function chooseFrom(value: string) {
+		from = isDay(value) ? value : '';
+		const url = new URL(page.url.href);
+		if (from === '') url.searchParams.delete('from');
+		else url.searchParams.set('from', from);
+		void goto(url, { shallow: true, replace: true });
+		restart();
 	}
 
 	const utc = (seconds: number) => new Date(seconds * 1000).toISOString().slice(0, 16) + 'Z';
@@ -187,6 +223,16 @@
 				Replay
 			</button>
 		</div>
+		<label>
+			From
+			<input
+				type="date"
+				min={FIRST_DAY}
+				max={LAST_DAY}
+				value={from}
+				onchange={(event) => chooseFrom(event.currentTarget.value)}
+			/>
+		</label>
 		{#if mode === 'hindsight'}
 			<div class="switch" role="group" aria-label="Timeframe">
 				{#each TIMEFRAMES as option (option)}
@@ -224,7 +270,7 @@
 						{/each}
 					</select>
 				</label>
-				<button type="button" onclick={restart} disabled={!replay || cursor === 0}>Restart</button>
+				<button type="button" onclick={restart} disabled={!replay || cursor === start}>Restart</button>
 			</div>
 		{/if}
 		<p class="status">
@@ -248,8 +294,8 @@
 				{:else}
 					{replay.timeframe} candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
 						? `, ${utc(now)}`
-						: ''}: {shownPoints.length} turning points confirmed, {shownLevels.length} levels active,
-					{shownExtremes.length} swing extremes standing, {shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending, {tally.unscored} before the scoring period
+						: ''}: {watchedPoints.length} turning points confirmed, {shownLevels.length} levels active,
+					{shownExtremes.length} swing extremes standing, {watchedMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending, {tally.unscored} before the scoring period
 				{/if}
 			{/if}
 		</p>
@@ -268,25 +314,32 @@
 		</div>
 	{/if}
 	{#if mode === 'hindsight'}
-		<CandleChart {candles} {turningPoints} />
+		<CandleChart {candles} start={hindsightStart} {turningPoints} />
 	{:else}
 		<CandleChart
 			candles={replay?.candles ?? []}
 			visible={cursor}
+			{start}
 			turningPoints={shownPoints}
 			lines={[...shownLevels, ...shownExtremes]}
 			marks={shownMarks}
 		/>
 	{/if}
 	<p class="legend">
-		<span class="dot"></span> turning point (8% reversal, in hindsight) · <span class="level"
-			>orange line</span
-		> level the detector sees (zone within 1%) · <span class="extreme">purple line</span> swing
-		extreme the detector reads (a mark on the first candle short of it, once the swing is 8%) ·
-		<span class="arrow">▼</span> top mark ·
-		<span class="arrow">▲</span> bottom mark · <span class="unscored">light grey</span> before the
-		scoring period (2016) · <span class="pending">grey</span> pending · <span class="hit">green</span>
-		hit · <span class="false">red</span> false mark
+		<span class="dot"></span> turning point (8% reversal, in hindsight)
+		{#if mode === 'replay' && replay && !loading}
+			{#if replay.levels.length > 0}
+				· <span class="level">orange line</span> level the detector sees (zone within 1%)
+			{/if}
+			{#if replay.swing_extremes.length > 0}
+				· <span class="extreme">purple line</span> swing extreme the detector reads (a mark on the
+				first candle short of it, once the swing is 8%)
+			{/if}
+			· <span class="arrow">▼</span> top mark · <span class="arrow">▲</span> bottom mark ·
+			<span class="unscored">light grey</span> before the scoring period (2016) ·
+			<span class="pending">grey</span> pending · <span class="hit">green</span> hit ·
+			<span class="false">red</span> false mark
+		{/if}
 	</p>
 </main>
 
@@ -352,7 +405,8 @@
 		font-size: 0.9rem;
 		color: #444;
 	}
-	select {
+	select,
+	input {
 		font: inherit;
 		margin-left: 4px;
 	}

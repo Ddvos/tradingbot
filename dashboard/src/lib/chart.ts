@@ -1,5 +1,19 @@
 import type { SeriesMarker, Time, UTCTimestamp } from 'lightweight-charts';
-import type { Kind, Level, SwingExtreme, TurningPoint } from '#lib/api.ts';
+import type { Candle, Kind, Level, SwingExtreme, TurningPoint } from '#lib/api.ts';
+
+/** The index of the first candle at or after `time`, or `candles.length` when none is; 0
+ * when there is no start time. Candles are oldest first, so this is a binary search. */
+export function startIndex(candles: Candle[], time: number | null): number {
+	if (time === null) return 0;
+	let low = 0;
+	let high = candles.length;
+	while (low < high) {
+		const middle = (low + high) >> 1;
+		if (candles[middle].time < time) low = middle + 1;
+		else high = middle;
+	}
+	return low;
+}
 
 /** A mark as the chart shows it: unscored before the scored period, else pending until its
  * outcome is settled. */
@@ -15,8 +29,6 @@ export interface ChartMark {
 /** A horizontal line as the chart draws it, over the candles that have seen it so far: a level
  * the detector sees, or the swing extreme it reads. */
 export interface ChartLine {
-	/** Identifies the line from one render to the next. */
-	key: string;
 	price: number;
 	/** Start time of the first candle that saw it. */
 	from: number;
@@ -38,19 +50,30 @@ export const COLORS = {
 /** What a level and a swing extreme share: a price with the span of candles that see it. */
 type Span = Pick<Level | SwingExtreme, 'kind' | 'price' | 'time' | 'active_from' | 'active_until'>;
 
-/** The spans seen at the latest shown candle, starting at `now`, each drawn as a line in
- * `color` from the first candle that saw it up to that candle; `prefix` keeps the keys of
- * levels and swing extremes apart. */
-export function toLines(spans: Span[], now: number, prefix: string, color: string): ChartLine[] {
+/** The spans seen at the latest shown candle, `now`, each drawn as a line in `color` from
+ * the first candle that saw it up to that candle. */
+export function toLines(spans: Span[], now: number, color: string): ChartLine[] {
 	return spans
 		.filter((s) => s.active_from <= now && (s.active_until === null || now <= s.active_until))
 		.map((s) => ({
-			key: `${prefix}:${s.kind}@${s.time}`,
 			price: s.price,
 			from: s.active_from,
 			to: now,
 			color
 		}));
+}
+
+/** Whether two marker lists draw the same thing, so the chart can skip setting them again. */
+export function sameMarkers(a: SeriesMarker<Time>[], b: SeriesMarker<Time>[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		const x = a[i];
+		const y = b[i];
+		if (x.time !== y.time || x.color !== y.color || x.text !== y.text || x.shape !== y.shape) {
+			return false;
+		}
+	}
+	return true;
 }
 
 /** Turning points as blue dots on their extreme, marks as arrows coloured by outcome. */
