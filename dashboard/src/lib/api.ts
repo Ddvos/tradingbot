@@ -1,7 +1,7 @@
 import { PUBLIC_API_URL } from '$app/env/public';
 
-export type Timeframe = '1h' | '4h' | '1d';
-export const TIMEFRAMES: Timeframe[] = ['1h', '4h', '1d'];
+export type Timeframe = '15m' | '1h' | '4h' | '1d';
+export const TIMEFRAMES: Timeframe[] = ['15m', '1h', '4h', '1d'];
 
 export type Kind = 'top' | 'bottom';
 
@@ -44,6 +44,8 @@ export interface MarkOutcome {
 	time: number;
 	/** The close of the candle the mark was placed on. */
 	price: number;
+	/** Whether the mark falls in the scored period; an unscored mark is neither a hit nor a false mark. */
+	scored: boolean;
 	hit: boolean;
 	/** Time of the turning point this mark is the hit of, if any. */
 	turning_point: number | null;
@@ -55,6 +57,18 @@ export interface MarkOutcome {
 	settled_at: number;
 }
 
+/** A fixed block of years within the scoring period; `start` inclusive, `end` exclusive. */
+export interface Era {
+	name: string;
+	start: number;
+	end: number;
+}
+
+export interface EraScore {
+	era: Era;
+	score: Score;
+}
+
 export interface Score {
 	turning_points: number;
 	marks: number;
@@ -62,13 +76,20 @@ export interface Score {
 	false_marks: number;
 	hit_rate: number;
 	false_mark_rate: number;
+	/** Median timing of the hits in hourly candles; null without hits. */
 	median_timing: number | null;
 	median_give_up: number | null;
+	/** The same numbers per era, in era order; empty for a score without eras. */
+	eras: EraScore[];
 }
 
 export interface Replay {
 	detector: string;
-	/** The hourly candles of the development period, oldest first. */
+	/** The timeframe of `candles`: what the detector read. */
+	timeframe: Timeframe;
+	/** Start of the scored period; marks before it are unscored. */
+	scored_from: number | null;
+	/** Every candle the detector read, oldest first: the whole development period. */
 	candles: Candle[];
 	turning_points: TurningPoint[];
 	/** The levels the detector read; empty for a detector that reads none. */
@@ -104,7 +125,7 @@ export async function fetchTurningPoints(timeframe: Timeframe): Promise<TurningP
 	return body.turning_points;
 }
 
-/** The development period replayed through a detector: candles, levels, marks, outcomes, score. */
+/** The development period replayed through a detector, scored over the scoring period: candles, levels, marks, outcomes, score per era. */
 export async function fetchReplay(detector: string): Promise<Replay> {
 	return get<Replay>(`/replay?detector=${encodeURIComponent(detector)}`);
 }

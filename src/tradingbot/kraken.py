@@ -1,10 +1,11 @@
-"""Kraken spot data sources for the hourly XBTUSD candles.
+"""Kraken spot data sources for the XBTUSD candles.
 
 * The downloadable OHLCVT archive: one header-less CSV per pair and timeframe
   (`timestamp,open,high,low,close,volume,trades`, Unix seconds UTC), which
   holds the history back to 2013 and is downloaded by hand.
-* The public REST OHLC endpoint, which answers at most the latest 720 hourly
-  candles, the last of them still forming.
+* The public REST OHLC endpoint, which answers at most the latest 720 candles
+  of one timeframe, the last of them still forming: 30 days of hourly candles
+  or 7.5 days of fifteen-minute ones.
 """
 
 from __future__ import annotations
@@ -15,15 +16,15 @@ from pathlib import Path
 
 import httpx
 
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe
 
 PAIR = "XBTUSD"
 REST_REACH = 720
-"""The most hourly candles the REST endpoint ever answers; older ones it cannot reach."""
+"""The most candles the REST endpoint ever answers; older ones it cannot reach."""
 
 
 def read_archive(path: Path) -> Iterator[Candle]:
-    """Yield the hourly candles of one OHLCVT archive file."""
+    """Yield the candles of one OHLCVT archive file."""
     with path.open(newline="") as file:
         for row in csv.reader(file):
             if not row:
@@ -48,10 +49,10 @@ class KrakenSpot:
     def __init__(self, http: httpx.Client | None = None) -> None:
         self._http = http or httpx.Client(timeout=30.0)
 
-    def hourly_candles(self, since: int | None) -> list[Candle]:
-        """The hourly candles from `since` (inclusive) on, at most `REST_REACH` of
-        them plus the still-forming one; `None` asks for everything it has."""
-        params: dict[str, str] = {"pair": PAIR, "interval": "60"}
+    def candles(self, timeframe: Timeframe, since: int | None) -> list[Candle]:
+        """The candles of `timeframe` from `since` (inclusive) on, at most `REST_REACH`
+        of them plus the still-forming one; `None` asks for everything it has."""
+        params: dict[str, str] = {"pair": PAIR, "interval": str(timeframe.seconds // 60)}
         if since is not None:
             params["since"] = str(since)
         response = self._http.get(f"{self.BASE_URL}/0/public/OHLC", params=params)

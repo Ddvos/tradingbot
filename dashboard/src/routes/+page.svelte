@@ -27,8 +27,9 @@
 	let candles = $state.raw<Candle[]>([]);
 	let turningPoints = $state.raw<TurningPoint[]>([]);
 
-	// Replay: the same hourly candles handed to the detector one at a time. `cursor` is how
-	// many candles have been shown; it only ever grows, except on a restart to zero.
+	// Replay: the candles of the detector's timeframe handed to it one at a time, over the
+	// scoring period. `cursor` is how many candles have been shown; it only ever grows,
+	// except on a restart to zero.
 	let replay = $state.raw<Replay | null>(null);
 	let cursor = $state(0);
 	let playing = $state(false);
@@ -86,14 +87,21 @@
 						time: m.time,
 						price: m.price,
 						timing: m.timing,
-						state: m.settled_at <= now ? (m.hit ? 'hit' : 'false') : 'pending'
+						state: !m.scored
+							? 'unscored'
+							: m.settled_at <= now
+								? m.hit
+									? 'hit'
+									: 'false'
+								: 'pending'
 					}))
 			: []
 	);
 	const tally = $derived({
 		hits: shownMarks.filter((m) => m.state === 'hit').length,
 		false: shownMarks.filter((m) => m.state === 'false').length,
-		pending: shownMarks.filter((m) => m.state === 'pending').length
+		pending: shownMarks.filter((m) => m.state === 'pending').length,
+		unscored: shownMarks.filter((m) => m.state === 'unscored').length
 	});
 
 	let frame: number | undefined;
@@ -226,30 +234,38 @@
 				<span class="error">{error}</span>
 			{:else if mode === 'hindsight'}
 				{#if candles.length === 0}
-					No candles in the development period (before 2024-10-19). Import an archive that
-					covers it.
+					No {timeframe} candles in the development period (before 2024-10-19). Import an
+					archive that covers it.
 				{:else}
-					{candles.length.toLocaleString()} candles from {utc(candles[0].time)} to {utc(
+					{candles.length.toLocaleString()} {timeframe} candles from {utc(candles[0].time)} to {utc(
 						candles[candles.length - 1].time
 					)}, {turningPoints.length} turning points
 				{/if}
 			{:else if replay}
 				{#if total === 0}
-					No candles in the development period (before 2024-10-19). Import an archive that
-					covers it.
+					No {replay.timeframe} candles in the development period (before 2024-10-19). Import an
+					archive that covers it.
 				{:else}
-					Candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
+					{replay.timeframe} candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
 						? `, ${utc(now)}`
 						: ''}: {shownPoints.length} turning points confirmed, {shownLevels.length} levels active,
-					{shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending
+					{shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending, {tally.unscored} before the scoring period
 				{/if}
 			{/if}
 		</p>
 	</header>
 	{#if mode === 'replay' && replay && total > 0}
-		<p class="score">
-			<strong>{replay.detector}</strong> over the development period: {describe(replay.score)}
-		</p>
+		<div class="score">
+			<p>
+				<strong>{replay.detector}</strong> on {replay.timeframe} candles over the scoring period:
+				{describe(replay.score)}
+			</p>
+			<ul class="eras">
+				{#each replay.score.eras as era (era.era.name)}
+					<li><strong>{era.era.name}</strong>: {describe(era.score)}</li>
+				{/each}
+			</ul>
+		</div>
 	{/if}
 	{#if mode === 'hindsight'}
 		<CandleChart {candles} {turningPoints} />
@@ -266,8 +282,9 @@
 		<span class="dot"></span> turning point (8% reversal, in hindsight) · <span class="level"
 			>orange line</span
 		> level the detector sees (zone within 1%) · <span class="arrow">▼</span> top mark ·
-		<span class="arrow">▲</span> bottom mark · <span class="pending">grey</span> pending ·
-		<span class="hit">green</span> hit · <span class="false">red</span> false mark
+		<span class="arrow">▲</span> bottom mark · <span class="unscored">light grey</span> before the
+		scoring period (2016) · <span class="pending">grey</span> pending · <span class="hit">green</span>
+		hit · <span class="false">red</span> false mark
 	</p>
 </main>
 
@@ -347,6 +364,13 @@
 	.score {
 		margin-bottom: 12px;
 	}
+	.score p {
+		margin: 0;
+	}
+	.eras {
+		margin: 4px 0 0;
+		padding-left: 20px;
+	}
 	.legend {
 		margin-top: 8px;
 	}
@@ -366,6 +390,9 @@
 	}
 	.level {
 		color: #ff9800;
+	}
+	.unscored {
+		color: #bdbdbd;
 	}
 	.pending {
 		color: #9e9e9e;

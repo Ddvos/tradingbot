@@ -1,12 +1,13 @@
 import type { SeriesMarker, Time, UTCTimestamp } from 'lightweight-charts';
 import type { Kind, TurningPoint } from '#lib/api.ts';
 
-/** A mark as the chart shows it: pending until its outcome is settled. */
+/** A mark as the chart shows it: unscored before the scored period, else pending until its
+ * outcome is settled. */
 export interface ChartMark {
 	kind: Kind;
 	time: number;
 	price: number;
-	state: 'pending' | 'hit' | 'false';
+	state: 'unscored' | 'pending' | 'hit' | 'false';
 	/** Candles late (positive) or early (negative), shown once the mark is a hit. */
 	timing: number | null;
 }
@@ -28,6 +29,7 @@ export const levelKey = (level: ChartLevel) => `${level.kind}@${level.time}`;
 export const COLORS = {
 	turningPoint: '#2962ff',
 	level: '#ff9800',
+	unscored: '#d6d6d6',
 	pending: '#9e9e9e',
 	hit: '#2e7d32',
 	false: '#c62828'

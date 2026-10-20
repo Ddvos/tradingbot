@@ -5,13 +5,14 @@ from collections.abc import Sequence
 
 import pytest
 
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe, period_start, resample
 from tradingbot.detectors import LEVEL_LIFETIME, DetectorTwo, FloorDetector, Level, Mark
-from tradingbot.replay import ReplayResult, replay, run
+from tradingbot.replay import ReplayResult, replay, replay_all, run
 from tradingbot.scoring import match_marks
 from tradingbot.turning_points import Kind, TurningPoint, find_turning_points
 
 H = 3600
+Q = 900  # a quarter of an hour
 T0 = 1_704_067_200  # 2024-01-01T00:00:00Z
 
 
@@ -29,12 +30,30 @@ def random_walk(hours: int, seed: int) -> list[Candle]:
     return candles
 
 
+def quarter_walk(hours: int, seed: int) -> list[Candle]:
+    """A seeded fifteen-minute random walk with moves of up to 1.5% a quarter; the :30
+    candle of every seventh hour had no trades."""
+    rng = random.Random(seed)
+    candles: list[Candle] = []
+    close = 1000.0
+    for quarter in range(hours * 4):
+        if quarter % 28 == 2:
+            continue
+        open_ = close
+        close = open_ * (1 + rng.uniform(-0.015, 0.015))
+        high = max(open_, close) * (1 + rng.uniform(0, 0.005))
+        low = min(open_, close) * (1 - rng.uniform(0, 0.005))
+        candles.append(Candle(T0 + quarter * Q, open_, high, low, close, 1.0, 1))
+    return candles
+
+
 class Spy:
     """A detector that records exactly what replay shows it and marks every candle a top."""
 
     name = "spy"
 
-    def __init__(self) -> None:
+    def __init__(self, timeframe: Timeframe = Timeframe.H1) -> None:
+        self.timeframe = timeframe
         self.candles_seen: list[tuple[Candle, ...]] = []
         self.levels_seen: list[tuple[TurningPoint, ...]] = []
 
@@ -154,21 +173,44 @@ def test_a_mark_in_a_flat_market_is_settled_only_by_the_last_candle() -> None:
     assert result.marks[0].settled_at == T0 + 99 * H
 
 
-def test_scoring_from_a_time_keeps_the_candles_marks_and_turning_points_from_then_on() -> None:
+def test_scoring_from_a_time_scores_the_marks_and_turning_points_from_then_on() -> None:
     candles = random_walk(hours=2000, seed=9)
     boundary = T0 + 1500 * H
     spy = Spy()
 
     result = run(candles, spy, score_from=boundary)
 
-    assert [c.time for c in result.candles] == [c.time for c in candles if c.time >= boundary]
-    assert [m.time for m in result.marks] == [c.time for c in candles if c.time >= boundary]
-    assert all(p.time >= boundary for p in result.turning_points)
+    assert result.scored_from == boundary
+    assert result.candles == candles, "the whole run is recorded"
+    assert [c.time for c in result.scored_candles] == [
+        c.time for c in candles if c.time >= boundary
+    ]
+    assert [m.time for m in result.marks] == [c.time for c in candles], "every mark is recorded"
+    assert [m.time for m in result.marks if m.scored] == [
+        c.time for c in candles if c.time >= boundary
+    ]
+    assert result.turning_points == find_turning_points(candles)
     assert result.score.marks == 500
     assert result.score.turning_points == len(
         [p for p in find_turning_points(candles) if p.time >= boundary]
     )
     assert result.score.turning_points > 3
+
+
+def test_a_mark_before_the_scored_time_is_unscored() -> None:
+    candles = random_walk(hours=2000, seed=9)
+    boundary = T0 + 1500 * H
+
+    result = run(candles, Spy(), score_from=boundary)
+
+    before = [m for m in result.marks if m.time < boundary]
+    assert len(before) == 1500
+    assert all(
+        (m.scored, m.hit, m.turning_point, m.timing, m.give_up, m.settled_at)
+        == (False, False, None, None, None, m.time)
+        for m in before
+    )
+    assert all(m.scored for m in result.marks if m.time >= boundary)
 
 
 def test_the_detector_still_sees_every_candle_before_the_scored_time() -> None:
@@ -189,9 +231,10 @@ def test_marks_scored_from_a_time_are_settled_by_a_kept_candle() -> None:
 
     result = run(candles, FloorDetector(), score_from=boundary)
 
-    kept = {c.time for c in result.candles}
-    assert result.marks, "the floor should place marks past the boundary"
-    for outcome in result.marks:
+    scored = [m for m in result.marks if m.scored]
+    kept = {c.time for c in result.scored_candles}
+    assert scored, "the floor should place marks past the boundary"
+    for outcome in scored:
         assert outcome.settled_at in kept
         assert outcome.settled_at >= outcome.time
 
@@ -210,24 +253,121 @@ def test_a_run_carries_the_levels_the_detector_read_with_their_spans() -> None:
     assert run(candles, Spy()).levels == []
 
 
-def test_scoring_from_a_time_keeps_the_levels_still_seen_from_then_on() -> None:
+def test_scoring_from_a_time_records_every_level_the_detector_read() -> None:
     candles = random_walk(hours=2000, seed=12)
     boundary = T0 + 1500 * H
 
     whole = run(candles, DetectorTwo())
-    kept = run(candles, DetectorTwo(), score_from=boundary)
+    scored = run(candles, DetectorTwo(), score_from=boundary)
 
-    assert kept.levels == [
-        level
-        for level in whole.levels
-        if level.active_until is not None and level.active_until >= boundary
-    ]
-    assert any(level.time < boundary for level in kept.levels), (
-        "a level from before the boundary that is still seen after it is kept"
-    )
+    assert scored.levels == whole.levels
+    assert scored.score != whole.score
 
 
 def test_scoring_from_before_the_first_candle_changes_nothing() -> None:
     candles = random_walk(hours=500, seed=11)
 
-    assert run(candles, FloorDetector(), score_from=T0 - H) == run(candles, FloorDetector())
+    scored = run(candles, FloorDetector(), score_from=T0 - H)
+    whole = run(candles, FloorDetector())
+
+    assert (scored.marks, scored.score, scored.candles) == (whole.marks, whole.score, whole.candles)
+    assert (scored.scored_from, whole.scored_from) == (T0 - H, None)
+
+
+def test_each_hourly_step_completes_its_own_candle_as_the_hourly_candle() -> None:
+    candles = random_walk(hours=5, seed=3)
+
+    steps = list(replay(candles, Spy()))
+
+    assert [step.completed for step in steps] == [(c,) for c in candles]
+
+
+def test_a_fifteen_minute_replay_builds_the_hourly_candles_as_hours_complete() -> None:
+    # Hour 00 has all four quarters, hour 01 lacks its last quarter, hour 02 has one
+    # candle and ends the series.
+    rows = [
+        (0, 100.0, 104.0, 99.0, 103.0),
+        (1, 103.0, 108.0, 102.0, 107.0),
+        (2, 107.0, 110.0, 105.0, 106.0),
+        (3, 106.0, 107.5, 101.0, 102.0),
+        (4, 102.0, 103.0, 98.0, 99.0),
+        (5, 99.0, 100.0, 97.0, 98.0),
+        (6, 98.0, 101.0, 96.0, 100.0),
+        # 01:45 has no candle
+        (8, 100.0, 102.0, 99.0, 101.0),
+    ]
+    quarters = [Candle(T0 + q * Q, o, h, lo, c, 1.0, 1) for q, o, h, lo, c in rows]
+
+    steps = list(replay(quarters, Spy(Timeframe.M15)))
+
+    assert [step.candle for step in steps] == quarters
+    assert [step.completed for step in steps] == [
+        (),
+        (),
+        (),
+        (Candle(T0, 100.0, 110.0, 99.0, 102.0, 4.0, 4),),
+        (),
+        (),
+        (),
+        (
+            Candle(T0 + H, 102.0, 103.0, 96.0, 100.0, 3.0, 3),
+            Candle(T0 + 2 * H, 100.0, 102.0, 99.0, 101.0, 1.0, 1),
+        ),
+    ]
+
+
+def test_the_hourly_candles_built_in_a_fifteen_minute_replay_equal_the_resampled_ones() -> None:
+    quarters = quarter_walk(hours=300, seed=21)
+
+    replayed = replay_all(quarters, Spy(Timeframe.M15))
+
+    assert replayed.hourly == resample(quarters, Timeframe.H1)
+    assert replayed.candles == quarters
+    assert replayed.timeframe is Timeframe.M15
+    assert len(replayed.completed_at) == len(replayed.hourly)
+    for hour, completed_at in zip(replayed.hourly, replayed.completed_at, strict=True):
+        assert period_start(completed_at, Timeframe.H1) >= hour.time
+    assert replayed.turning_points == find_turning_points(replayed.hourly)
+
+
+def test_a_turning_point_confirmed_by_the_hour_a_candle_completes_is_seen_on_that_candle() -> None:
+    quarters = quarter_walk(hours=400, seed=22)
+    spy = Spy(Timeframe.M15)
+
+    steps = list(replay(quarters, spy))
+
+    points = find_turning_points(resample(quarters, Timeframe.H1))
+    assert points, "the series should hold turning points"
+    assert list(spy.levels_seen[-1]) == points
+    completed: set[int] = set()
+    for step, levels in zip(steps, spy.levels_seen, strict=True):
+        completed.update(hour.time for hour in step.completed)
+        assert list(levels) == [p for p in points if p.confirmed_at in completed]
+    # Somewhere a turning point is confirmed by the last quarter of its hour, which is
+    # the step that completes the hour, so it was not visible one candle earlier.
+    assert any(
+        step.confirmed and step.candle.time + Q == step.completed[-1].time + H for step in steps
+    )
+
+
+def test_a_fifteen_minute_mark_is_scored_by_its_hour_and_settled_by_a_fifteen_minute_candle() -> (
+    None
+):
+    quarters = quarter_walk(hours=600, seed=23)
+
+    result = run(quarters, Spy(Timeframe.M15))
+
+    assert result.timeframe is Timeframe.M15
+    assert result.candles == quarters
+    assert [m.time for m in result.marks] == [c.time for c in quarters]
+    assert result.score.hits > 0
+    times = {c.time for c in quarters}
+    point_by_time = {p.time: p for p in result.turning_points}
+    for outcome in result.marks:
+        assert outcome.settled_at in times
+        assert outcome.settled_at >= outcome.time
+        if outcome.turning_point is not None:
+            point = point_by_time[outcome.turning_point]
+            assert outcome.timing == (period_start(outcome.time, Timeframe.H1) - point.time) // H
+            assert outcome.give_up is not None
+            assert abs(outcome.give_up) == abs(outcome.price - point.price) / point.price * 100

@@ -1,8 +1,9 @@
-"""The SQLite store of hourly spot candles.
+"""The SQLite store of spot candles.
 
-One table, one row per hour, keyed by the candle's start time. Hours with no
-trades have no row. Writing the same candle twice replaces it, so every import
-and catch-up can be re-run safely.
+One table per stored timeframe, `candles_1h` for hourly and `candles_15m` for
+fifteen-minute candles, with the same columns: one row per period, keyed by
+the candle's start time. Periods with no trades have no row. Writing the same
+candle twice replaces it, so every import and catch-up can be re-run safely.
 """
 
 from __future__ import annotations
@@ -12,10 +13,13 @@ from collections.abc import Iterable
 from pathlib import Path
 from types import TracebackType
 
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe
+
+STORED_TIMEFRAMES = (Timeframe.M15, Timeframe.H1)
+"""The timeframes with a table of their own; 4-hour and daily candles are resampled."""
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS candles_1h (
+CREATE TABLE IF NOT EXISTS {table} (
     time    INTEGER PRIMARY KEY,
     open    REAL NOT NULL,
     high    REAL NOT NULL,
@@ -27,7 +31,7 @@ CREATE TABLE IF NOT EXISTS candles_1h (
 """
 
 _UPSERT = """
-INSERT INTO candles_1h (time, open, high, low, close, volume, trades)
+INSERT INTO {table} (time, open, high, low, close, volume, trades)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(time) DO UPDATE SET
     open = excluded.open,
@@ -40,25 +44,34 @@ ON CONFLICT(time) DO UPDATE SET
 
 
 class CandleStore:
-    """Hourly candles in a SQLite file; `":memory:"` keeps them in memory."""
+    """The candles of one timeframe in a SQLite file; `":memory:"` keeps them in memory.
 
-    def __init__(self, path: str | Path) -> None:
+    Several stores may open the same file, one per timeframe; each reads and
+    writes only its own table.
+    """
+
+    def __init__(self, path: str | Path, timeframe: Timeframe = Timeframe.H1) -> None:
+        if timeframe not in STORED_TIMEFRAMES:
+            stored = ", ".join(t.value for t in STORED_TIMEFRAMES)
+            raise ValueError(f"only {stored} candles are stored, not {timeframe.value}")
+        self.timeframe = timeframe
+        self._table = f"candles_{timeframe.value}"
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path))
-        self._conn.execute(_SCHEMA)
+        self._conn.execute(_SCHEMA.format(table=self._table))
         self._conn.commit()
 
     def upsert(self, candles: Iterable[Candle]) -> int:
-        """Store the candles and return how many hours were new."""
+        """Store the candles and return how many periods were new."""
         before = self.count()
         rows = [(c.time, c.open, c.high, c.low, c.close, c.volume, c.trades) for c in candles]
         with self._conn:
-            self._conn.executemany(_UPSERT, rows)
+            self._conn.executemany(_UPSERT.format(table=self._table), rows)
         return self.count() - before
 
     def read(self, start: int | None = None, end: int | None = None) -> list[Candle]:
-        """Hourly candles with `start <= time <= end`, oldest first."""
+        """Candles with `start <= time <= end`, oldest first."""
         clauses: list[str] = []
         params: list[int] = []
         if start is not None:
@@ -69,7 +82,7 @@ class CandleStore:
             params.append(end)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         cursor = self._conn.execute(
-            f"SELECT time, open, high, low, close, volume, trades FROM candles_1h {where} "
+            f"SELECT time, open, high, low, close, volume, trades FROM {self._table} {where} "
             "ORDER BY time",
             params,
         )
@@ -77,13 +90,13 @@ class CandleStore:
 
     def time_range(self) -> tuple[int, int] | None:
         """Start time of the oldest and the newest candle, or None when empty."""
-        row = self._conn.execute("SELECT MIN(time), MAX(time) FROM candles_1h").fetchone()
+        row = self._conn.execute(f"SELECT MIN(time), MAX(time) FROM {self._table}").fetchone()
         if row is None or row[0] is None:
             return None
         return (int(row[0]), int(row[1]))
 
     def count(self) -> int:
-        row = self._conn.execute("SELECT COUNT(*) FROM candles_1h").fetchone()
+        row = self._conn.execute(f"SELECT COUNT(*) FROM {self._table}").fetchone()
         return int(row[0])
 
     def close(self) -> None:

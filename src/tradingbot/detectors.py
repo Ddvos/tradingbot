@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe
 from tradingbot.turning_points import Kind, TurningPoint, fall, rise
 
 
@@ -55,11 +55,11 @@ def level_of(point: TurningPoint, lifetime: int | None) -> Level:
 class Detector(Protocol):
     """What replay asks of a detector.
 
-    At the close of every candle, `mark`: `candles` are the candles so far,
-    oldest first, the latest one last; `levels` are the turning points confirmed
-    so far. Replay never hands a detector a later candle or a later turning
-    point. The answer is the kind of mark to place on the latest candle, or
-    None for no mark.
+    At the close of every candle of its `timeframe`, `mark`: `candles` are the
+    candles so far, oldest first, the latest one last; `levels` are the turning
+    points confirmed so far, always found on hourly candles. Replay never hands
+    a detector a later candle or a later turning point. The answer is the kind
+    of mark to place on the latest candle, or None for no mark.
 
     Once, at the end, `levels`: the levels the detector reads from the turning
     points, each with the span of candles that see it, so the result can show
@@ -67,6 +67,8 @@ class Detector(Protocol):
     """
 
     name: str
+    timeframe: Timeframe
+    """The candles the detector reads: fifteen-minute or hourly."""
 
     def mark(self, candles: Sequence[Candle], levels: Sequence[TurningPoint]) -> Kind | None: ...
 
@@ -78,7 +80,8 @@ FLOOR_DISTANCE = 0.03
 
 
 class FloorDetector:
-    """The reference every detector must beat; never a candidate itself.
+    """The reference detector of the hourly harness, kept for comparison; never a
+    candidate itself, and since ADR-0005 it sets no bar.
 
     Marks a top on the first candle that closes 3% below the highest high since
     the last bottom mark, and a bottom on the first candle that closes 3% above
@@ -87,6 +90,7 @@ class FloorDetector:
     """
 
     name = "floor"
+    timeframe = Timeframe.H1
 
     def __init__(self, distance: float = FLOOR_DISTANCE) -> None:
         self._distance = distance
@@ -213,6 +217,7 @@ class DetectorOne:
     """
 
     name = "one"
+    timeframe = Timeframe.H1
 
     def __init__(self) -> None:
         self._prices: list[float] = []
@@ -245,6 +250,7 @@ class DetectorTwo:
     """
 
     name = "two"
+    timeframe = Timeframe.H1
 
     def __init__(self) -> None:
         self._first_active = 0
