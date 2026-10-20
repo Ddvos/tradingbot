@@ -5,19 +5,18 @@ the one out-of-sample check."""
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
 from pathlib import Path
 
-from tradingbot import out_of_sample
+from tradingbot import out_of_sample, re_score
 from tradingbot.candles import Candle, Timeframe, iso
 from tradingbot.detectors import DETECTORS, Detector
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY, read_development
 from tradingbot.hourly_check import check_hourly
 from tradingbot.kraken import REST_REACH, KrakenSpot
-from tradingbot.replay import ReplayResult, collect, run, score_replayed
+from tradingbot.replay import ReplayResult, run
 from tradingbot.scoring import SCORING_START, describe_score
 from tradingbot.store import STORED_TIMEFRAMES, CandleStore
 from tradingbot.sync import catch_up, import_archive
@@ -67,12 +66,15 @@ def run_serve(db: Path, host: str, port: int) -> None:
     uvicorn.run(create_app(db), host=host, port=port)
 
 
+def span(candles: list[Candle]) -> str:
+    return f"{len(candles)} candles from {iso(candles[0].time)} to {iso(candles[-1].time)}"
+
+
 def report(result: ReplayResult, period: str) -> str:
-    """The score as the batch commands print it; `period` names what was replayed."""
-    first, last = result.candles[0].time, result.candles[-1].time
+    """The score as the batch commands print it; `period` names what was scored."""
     heading = (
-        f"Replayed {result.detector} {period}: {len(result.candles)} "
-        f"candles from {iso(first)} to {iso(last)}."
+        f"Replayed {result.detector} over {span(result.candles)}, scored {period}: "
+        f"{span(result.scored_candles)}."
     )
     lines = [f"  {label:<16} {value}" for label, value in describe_score(result.score)]
     return "\n".join([heading, *lines])
@@ -115,7 +117,7 @@ def run_replay(db: Path, name: str, out: Path | None) -> None:
         )
     candles = read_development_candles(db, detector)
     result = run(candles, detector, score_from=SCORING_START)
-    if not result.candles:
+    if not result.scored_candles:
         sys.exit(
             f"No candle falls in the scoring period, which starts at {iso(SCORING_START)}; "
             "the development candles end before it."
@@ -125,66 +127,49 @@ def run_replay(db: Path, name: str, out: Path | None) -> None:
 
 
 def run_re_score(db: Path, name: str, recorded: Path | None) -> None:
-    """Score a recorded run under the current definitions (ADR-0004).
-
-    The recorded run's own candles are replayed through the detector, so the
-    marks are what they were when the run was recorded, whatever the store holds
-    now, and the command refuses to report unless they are identical in number
-    and time to the recorded marks.
-    """
     detector = detector_named(name)
     recorded = recorded or db.parent / f"replay-{name}.json"
-    data = json.loads(recorded.read_text())
-    if data["detector"] != name:
-        sys.exit(f"{recorded} records a run of {data['detector']!r}, not of {name!r}.")
-    candles = [Candle(**row) for row in data["candles"]]
-    recorded_marks = [(m["kind"], m["time"]) for m in data["marks"]]
-    replayed = collect(candles, detector)
-    fresh = [(m.kind.value, m.time) for m in replayed.marks]
-    if fresh != recorded_marks:
-        first = next(
-            (t for (_, t), r in zip(fresh, recorded_marks, strict=False) if (_, t) != r),
-            None,
-        )
-        if first is None:
-            first = (fresh + recorded_marks)[min(len(fresh), len(recorded_marks))][1]
-        sys.exit(
-            f"The fresh replay of {name} placed {len(fresh)} marks where {recorded} records "
-            f"{len(recorded_marks)}; the first difference is at {iso(first)}. The run is not "
-            "the recorded one, so nothing is reported."
-        )
-    result = score_replayed(replayed, score_from=SCORING_START)
+    try:
+        scored = re_score.re_score(re_score.RecordedRun.read(recorded), detector, recorded)
+    except re_score.Refused as refused:
+        sys.exit(str(refused))
     print(
-        f"Re-scored {name} under ADR-0005: {len(fresh)} marks, identical in number and time "
+        f"Re-scored {name} under ADR-0005: {scored.marks} marks, identical in number and time "
         f"to the recorded run in {recorded}."
     )
-    print(report(result, "over the scoring period"))
+    print(report(scored.result, "over the scoring period"))
 
 
 def run_check_hourly(db: Path) -> None:
     with CandleStore(db, Timeframe.M15) as fifteen, CandleStore(db) as hourly:
-        quarters = read_development(fifteen)
+        fifteen_minute = read_development(fifteen)
         stored = read_development(hourly)
-    for candles, label in ((quarters, Timeframe.M15.label), (stored, Timeframe.H1.label)):
+    for candles, timeframe in ((fifteen_minute, Timeframe.M15), (stored, Timeframe.H1)):
         if not candles:
             sys.exit(
-                f"The store holds no {label} candles in the development period. Import the "
-                "archive that holds them."
+                f"The store holds no {timeframe.label} candles in the development period. "
+                "Import the archive that holds them."
             )
-    result = check_hourly(quarters, stored, SCORING_START)
+    try:
+        result = check_hourly(fifteen_minute, stored, SCORING_START)
+    except ValueError:
+        sys.exit(
+            f"No hourly candle falls in the scoring period, which starts at {iso(SCORING_START)}; "
+            "the development candles end before it."
+        )
+    print(
+        f"Built {result.built} hourly candles from {result.fifteen_minute} 15-minute candles over "
+        f"the scoring period, {iso(result.first)} to {iso(result.last)}; the hourly table holds "
+        f"{result.stored}."
+    )
     counted = [
         ("only in the 15-minute build", result.only_built),
         ("only in the hourly table", result.only_stored),
         ("differing hours", result.differing),
     ]
-    print(
-        f"Built {result.built} hourly candles from {result.quarters} 15-minute candles over the "
-        f"scoring period, {iso(result.first)} to {iso(result.last)}; the hourly table holds "
-        f"{result.stored}."
-    )
-    for label, times in counted:
+    for what, times in counted:
         first = f"  (first {iso(times[0])})" if times else ""
-        print(f"  {label:<29} {len(times)}{first}")
+        print(f"  {what:<29} {len(times)}{first}")
     first_point = (
         f"  (first {iso(result.differing_points[0].time)})" if result.differing_points else ""
     )

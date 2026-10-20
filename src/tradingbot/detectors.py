@@ -80,7 +80,8 @@ FLOOR_DISTANCE = 0.03
 
 
 class FloorDetector:
-    """The reference every detector must beat; never a candidate itself.
+    """The reference detector of the hourly harness, kept for comparison; never a
+    candidate itself, and since ADR-0005 it sets no bar.
 
     Marks a top on the first candle that closes 3% below the highest high since
     the last bottom mark, and a bottom on the first candle that closes 3% above

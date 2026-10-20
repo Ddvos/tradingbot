@@ -23,7 +23,7 @@ from tradingbot.turning_points import TurningPoint, find_turning_points
 
 @dataclass(frozen=True)
 class HourlyCheck:
-    quarters: int
+    fifteen_minute: int
     """Fifteen-minute candles read over the scoring period."""
     built: int
     """Hourly candles built from them over the scoring period."""
@@ -56,22 +56,26 @@ def same_candle(a: Candle, b: Candle) -> bool:
 
 
 def check_hourly(
-    quarters: Sequence[Candle], stored: Sequence[Candle], score_from: int
+    fifteen_minute: Sequence[Candle], stored: Sequence[Candle], score_from: int
 ) -> HourlyCheck:
-    """Compare the hourly candles built from `quarters` with `stored`, from `score_from` on.
+    """Compare the hourly candles built from the fifteen-minute candles with `stored`, from
+    `score_from` on.
 
     Both series are whole development series; the turning points are found over
-    all of them and compared from `score_from` on, like the candles.
+    all of them and compared from `score_from` on, like the candles. Raises
+    `ValueError` when neither series has a candle from `score_from` on.
     """
-    built = build_hourly(quarters, Timeframe.M15)
+    built = build_hourly(fifteen_minute, Timeframe.M15)
     built_period = {c.time: c for c in built if c.time >= score_from}
     stored_period = {c.time: c for c in stored if c.time >= score_from}
     both = sorted(built_period.keys() & stored_period.keys())
     times = sorted(built_period.keys() | stored_period.keys())
+    if not times:
+        raise ValueError(f"no hourly candle of either series falls from {score_from} on")
     built_points = {p for p in find_turning_points(built) if p.time >= score_from}
     stored_points = {p for p in find_turning_points(stored) if p.time >= score_from}
     return HourlyCheck(
-        quarters=sum(c.time >= score_from for c in quarters),
+        fifteen_minute=sum(c.time >= score_from for c in fifteen_minute),
         built=len(built_period),
         stored=len(stored_period),
         first=times[0],

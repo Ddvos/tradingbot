@@ -80,11 +80,11 @@ def check(store: CandleStore, detector: Detector, log: Path, now: int) -> Replay
             f"{iso(OUT_OF_SAMPLE_BOUNDARY)}. Import a quarterly archive or catch up first."
         )
     result = run(candles, detector, score_from=OUT_OF_SAMPLE_BOUNDARY, eras=())
-    first, last = result.candles[0].time, result.candles[-1].time
+    scored = result.scored_candles
     entry = LogEntry(
         when=iso(now),
         detector=detector.name,
-        period=f"{len(result.candles)} candles from {iso(first)} to {iso(last)}",
+        period=f"{len(scored)} candles from {iso(scored[0].time)} to {iso(scored[-1].time)}",
         score=summarize(result.score),
     )
     with log.open("a") as f:

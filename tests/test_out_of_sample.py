@@ -27,7 +27,9 @@ def test_a_run_is_logged_with_its_time_detector_period_and_score(tmp_path: Path)
 
     result = check(store_with_a_swing_past_the_boundary(), FloorDetector(), log, now=1_760_000_000)
 
-    assert result.candles[0].time == OUT_OF_SAMPLE_BOUNDARY
+    assert result.scored_from == OUT_OF_SAMPLE_BOUNDARY
+    assert result.scored_candles[0].time == OUT_OF_SAMPLE_BOUNDARY
+    assert result.candles[0].time < OUT_OF_SAMPLE_BOUNDARY, "the whole run is recorded"
     entry = LogEntry.parse(log.read_text().splitlines()[0])
     assert entry.when == "2025-10-09T08:53:20Z"
     assert entry.detector == "floor"

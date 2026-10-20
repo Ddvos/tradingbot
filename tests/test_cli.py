@@ -112,8 +112,11 @@ def test_replay_prints_the_floor_score_and_writes_the_chart_data(
     main(["replay", "floor", "--db", str(db), "--out", str(out)])
 
     printed = capsys.readouterr().out
-    assert "Replayed floor over the scoring period: 15 candles" in printed
-    assert "2024-01-01T00:00:00Z" in printed and "2024-01-01T15:00:00Z" in printed
+    assert (
+        "Replayed floor over 15 candles from 2024-01-01T00:00:00Z to 2024-01-01T15:00:00Z"
+        in printed
+    )
+    assert "scored over the scoring period: 15 candles from 2024-01-01T00:00:00Z" in printed
     assert "turning points" in printed and "hit rate" in printed and "false-mark rate" in printed
     assert "median timing" in printed and "median give-up" in printed
     assert "  2016-2018 " in printed and "  2019-2021 " in printed and "  2022-2024 " in printed
@@ -124,6 +127,7 @@ def test_replay_prints_the_floor_score_and_writes_the_chart_data(
     assert set(data) == {
         "detector",
         "timeframe",
+        "scored_from",
         "candles",
         "turning_points",
         "levels",
@@ -203,7 +207,7 @@ def test_replay_knows_detector_one(tmp_path: Path, capsys: pytest.CaptureFixture
 
     main(["replay", "one", "--db", str(db), "--out", str(out)])
 
-    assert "Replayed one over the scoring period" in capsys.readouterr().out
+    assert "Replayed one over 15 candles" in capsys.readouterr().out
     assert json.loads(out.read_text())["detector"] == "one"
 
 
@@ -213,7 +217,7 @@ def test_replay_knows_detector_two(tmp_path: Path, capsys: pytest.CaptureFixture
 
     main(["replay", "two", "--db", str(db), "--out", str(out)])
 
-    assert "Replayed two over the scoring period" in capsys.readouterr().out
+    assert "Replayed two over 15 candles" in capsys.readouterr().out
     data = json.loads(out.read_text())
     assert data["detector"] == "two"
     assert [level["time"] for level in data["levels"]] == [
@@ -249,13 +253,16 @@ def test_out_of_sample_scores_only_the_candles_past_the_boundary_and_logs_the_ru
     main(["out-of-sample", "floor", "--db", str(db), "--out", str(out)])
 
     printed = capsys.readouterr().out
-    assert "Replayed floor out of sample: 300 candles from 2024-10-19T00:00:00Z" in printed
+    assert "Replayed floor over 600 candles" in printed
+    assert "scored out of sample: 300 candles from 2024-10-19T00:00:00Z" in printed
     assert "hit rate" in printed and "false-mark rate" in printed
     assert "out-of-sample.log" in printed
     data = json.loads(out.read_text())
     assert data["detector"] == "floor"
-    assert all(c["time"] >= OUT_OF_SAMPLE_BOUNDARY for c in data["candles"])
-    assert all(m["time"] >= OUT_OF_SAMPLE_BOUNDARY for m in data["marks"])
+    assert data["scored_from"] == OUT_OF_SAMPLE_BOUNDARY
+    assert len(data["candles"]) == 600, "the whole run is recorded"
+    assert all((m["time"] >= OUT_OF_SAMPLE_BOUNDARY) == m["scored"] for m in data["marks"])
+    assert any(m["scored"] for m in data["marks"]) and any(not m["scored"] for m in data["marks"])
     lines = log.read_text().splitlines()
     assert len(lines) == 1
     assert "\tfloor\t" in lines[0]
@@ -308,7 +315,7 @@ def test_re_score_reports_the_recorded_run_under_the_current_definitions(
     printed = capsys.readouterr().out
     assert "Re-scored floor under ADR-0005" in printed
     assert "4 marks, identical" in printed and "replay-floor.json" in printed
-    assert "Replayed floor over the scoring period: 15 candles" in printed
+    assert "Replayed floor over 15 candles" in printed
     assert "hit rate" in printed and "  2022-2024 " in printed
 
 
@@ -394,6 +401,19 @@ def test_check_hourly_counts_a_differing_hour(
 
     printed = capsys.readouterr().out
     assert "differing hours               1  (first 2024-01-01T01:00:00Z)" in printed
+
+
+def test_check_hourly_stops_when_nothing_falls_in_the_scoring_period(tmp_path: Path) -> None:
+    db = tmp_path / "candles.sqlite"
+    before_2016 = 1_451_606_400 - 10 * H
+    with CandleStore(db, Timeframe.M15) as fifteen, CandleStore(db) as hourly:
+        fifteen.upsert(Candle(before_2016 + q * Q, 1.0, 1.0, 1.0, 1.0, 1.0, 1) for q in range(8))
+        hourly.upsert(Candle(before_2016 + h * H, 1.0, 1.0, 1.0, 1.0, 4.0, 4) for h in range(2))
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["check-hourly", "--db", str(db)])
+
+    assert "scoring period" in str(stopped.value)
 
 
 def test_check_hourly_stops_without_fifteen_minute_candles(tmp_path: Path) -> None:

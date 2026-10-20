@@ -44,6 +44,8 @@ export interface MarkOutcome {
 	time: number;
 	/** The close of the candle the mark was placed on. */
 	price: number;
+	/** Whether the mark falls in the scored period; an unscored mark is neither a hit nor a false mark. */
+	scored: boolean;
 	hit: boolean;
 	/** Time of the turning point this mark is the hit of, if any. */
 	turning_point: number | null;
@@ -85,7 +87,9 @@ export interface Replay {
 	detector: string;
 	/** The timeframe of `candles`: what the detector read. */
 	timeframe: Timeframe;
-	/** The candles of the detector's timeframe over the scoring period, oldest first. */
+	/** Start of the scored period; marks before it are unscored. */
+	scored_from: number | null;
+	/** Every candle the detector read, oldest first: the whole development period. */
 	candles: Candle[];
 	turning_points: TurningPoint[];
 	/** The levels the detector read; empty for a detector that reads none. */

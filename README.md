@@ -32,7 +32,7 @@ cat Kraken_OHLCVT_Full.zip.part0* > Kraken_OHLCVT_Full.zip
 unzip -d data/full-archive Kraken_OHLCVT_Full.zip XBTUSD_60.csv XBTUSD_15.csv
 ```
 
-The files you need are `XBTUSD_60.csv` (one row per hour) and `XBTUSD_15.csv` (one row per quarter of an hour): no header, columns `timestamp,open,high,low,close,volume,trades`, timestamps in Unix seconds UTC. Periods with no trades (common in the early years) simply have no row. The `data/` folder and any `XBTUSD_*.csv` are ignored by git, so the archive never ends up in a commit.
+The files you need are `XBTUSD_60.csv` (one row per hour) and `XBTUSD_15.csv` (one row per fifteen minutes): no header, columns `timestamp,open,high,low,close,volume,trades`, timestamps in Unix seconds UTC. Periods with no trades (common in the early years) simply have no row. The `data/` folder and any `XBTUSD_*.csv` are ignored by git, so the archive never ends up in a commit.
 
 ## Import the archive
 
@@ -60,7 +60,7 @@ uv run tradingbot serve
 
 Serves `GET http://localhost:8000/candles?timeframe=15m|1h|4h|1d&from=...&to=...`. Fifteen-minute and hourly candles come from their own tables; 4-hour and daily candles are resampled from the hourly ones. `from` and `to` are optional, as Unix seconds or ISO 8601 (`2024-01-01T00:00:00Z`), and are widened to whole periods, so a resampled candle is always built from every hour it covers. 4-hour candles start at 00:00, 04:00, ... UTC; daily candles at 00:00 UTC. Interactive docs are at `http://localhost:8000/docs`.
 
-Two more routes serve the harness over the development period: `GET /turning-points?timeframe=15m|1h|4h|1d` answers the turning points, always found on the hourly candles (on 15m they sit on the quarter that holds the extreme, on 4h and 1d on the candle that holds the hour), and `GET /replay?detector=floor` replays the candles of the detector's timeframe through it and answers the candles over the scoring period, the turning points, the levels the detector read with their active spans, every mark with its outcome, and the score, for the period and per era. All three routes stop at the out-of-sample boundary (see below).
+Two more routes serve the harness over the development period: `GET /turning-points?timeframe=15m|1h|4h|1d` answers the turning points, always found on the hourly candles (on 15m they sit on the fifteen-minute candle that holds the extreme, on 4h and 1d on the candle that holds the hour), and `GET /replay?detector=floor` replays the candles of the detector's timeframe through it and answers every candle it read, the turning points, the levels the detector read with their active spans, every mark with its outcome where the scoring period scored it, and the score over the scoring period, for the period and per era. All three routes stop at the out-of-sample boundary (see below).
 
 ## Start the dashboard
 
@@ -72,7 +72,7 @@ One page, two modes. It reads from the API, so start that first.
 
 **Hindsight** shows the whole development period as candlesticks with a 15m / 1h / 4h / 1d switch and the true turning points drawn as blue dots on their extremes.
 
-**Replay** hands the candles of the detector's timeframe to the chosen detector (`floor`, `one` or `two`, all hourly) one at a time, over the scoring period. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from nothing. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in hourly candles) or red (false mark) as soon as no later candle can change it: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's tolerance. Turning points appear as they are confirmed. The levels the detector sees at the latest candle are drawn as orange lines, each from the candle that confirmed its turning point up to the latest candle, and a line disappears when its level expires; the floor reads no levels, so it draws none. The lines under the controls are the detector's score over the scoring period and per era, the same numbers the batch command prints.
+**Replay** hands the candles of the detector's timeframe to the chosen detector (`floor`, `one` or `two`, all hourly) one at a time, from the first stored candle on. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from nothing. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in hourly candles) or red (false mark) as soon as no later candle can change it; a mark before the scoring period stays light grey, unscored: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's tolerance. Turning points appear as they are confirmed. The levels the detector sees at the latest candle are drawn as orange lines, each from the candle that confirmed its turning point up to the latest candle, and a line disappears when its level expires; the floor reads no levels, so it draws none. The lines under the controls are the detector's score over the scoring period and per era, the same numbers the batch command prints.
 
 ## Replay from the command line
 
@@ -80,11 +80,11 @@ One page, two modes. It reads from the API, so start that first.
 uv run tradingbot replay floor
 ```
 
-Replays the whole development period through the named detector, so it carries its state into the scoring period, scores the marks from 2016 on (for the period and per era) and writes the chart data (the same JSON the API answers for `/replay`) to `replay-<detector>.json` next to the store, or to `--out`. The score is identical run to run. A recorded run is never replaced: the command refuses to overwrite an existing chart-data file (ADR-0004), so pass `--out` for a fresh run. Three detectors exist, all on hourly candles: `floor`, the reference, `one`, the first candidate, and `two`, its second iteration. This is the floor's reference score, re-scored under the slice 5 definitions from the run recorded on issue #11 (the re-scored numbers are appended there too):
+Replays the whole development period through the named detector, so it carries its state into the scoring period, scores the marks from 2016 on (for the period and per era) and writes the chart data (the same JSON the API answers for `/replay`) to `replay-<detector>.json` next to the store, or to `--out`. The chart data records the whole run, every candle the detector read and every mark it placed, with the marks before the scoring period unscored, so the run can be re-scored later (ADR-0004). The score is identical run to run. A recorded run is never replaced: the command refuses to overwrite an existing chart-data file, so pass `--out` for a fresh run. Three detectors exist, all on hourly candles: `floor`, the reference, `one`, the first candidate, and `two`, its second iteration. This is the floor's reference score, re-scored under the slice 5 definitions from the run recorded on issue #11 (the re-scored numbers are appended there too):
 
 ```
 Re-scored floor under ADR-0005: 4463 marks, identical in number and time to the recorded run in data/replay-floor.json.
-Replayed floor over the scoring period: 76881 candles from 2016-01-01T04:00:00Z to 2024-10-18T23:00:00Z.
+Replayed floor over 85857 candles from 2013-10-06T21:00:00Z to 2024-10-18T23:00:00Z, scored over the scoring period: 76881 candles from 2016-01-01T04:00:00Z to 2024-10-18T23:00:00Z.
   turning points   798
   marks            3180
   hits             259  (hit rate 32.5%)
@@ -104,7 +104,7 @@ The floor sets no bar (ADR-0005): the bars are absolute. Detector one's and dete
 uv run tradingbot re-score floor
 ```
 
-ADR-0004 rules that a recorded run is re-scored, never re-run, when the harness changes. The command reads the recorded run's chart data (`replay-<detector>.json` next to the store, or `--recorded`), replays its own candles through the detector, and refuses to report unless the marks are identical in number and time to the recorded ones. It then prints the score under the current definitions, for the scoring period and per era, in the same shape as `replay`. The three family-one files hold every candle their runs read, three dropped prints included, which is why the marks come out identical although the store no longer holds those prints.
+ADR-0004 rules that a recorded run is re-scored, never re-run, when the harness changes. The command reads the recorded run's chart data (`replay-<detector>.json` next to the store, or `--recorded`), replays its own candles through the detector, never past the out-of-sample boundary, and refuses to report unless the marks are identical in number and time to the recorded ones. It then prints the score under the current definitions, for the scoring period and per era, in the same shape as `replay`. The three family-one files hold every candle their runs read, three dropped prints included, which is why the marks come out identical although the store no longer holds those prints; detector one's 2017 marks in the zones of the two spurious levels those prints made (3,484 and 4,000) stay in its recorded run and are scored with it.
 
 ## Check the hourly candles built from the fifteen-minute ones
 
@@ -144,7 +144,7 @@ Decided on 20 October 2026 and recorded in ADR-0004, ADR-0005 and ADR-0006 befor
 | A 15-minute mark | placed at the 15-minute close; scored by the hour it falls in; timing in hourly candles; give-up from the 15-minute close; at most one mark per 15-minute candle | `scoring.py`, `replay.py` |
 | Hourly candles in a 15-minute replay | built from the 15-minute stream when the hour completes (the candle ending at the hour, the first candle of a later hour, or the last candle of the series), fed to the turning-point finder, and compared with the stored hourly table over the scoring period | `replay.py`, `hourly_check.py` |
 
-A turning point confirmed by the hour a fifteen-minute candle completes is visible to the detector on that candle. A hit belongs to the era of its turning point, a false mark to the era of its mark.
+A turning point confirmed by the hour a fifteen-minute candle completes is visible to the detector on that candle. Two readings fixed in code rather than in the ADRs: a hit belongs to the era of its turning point, a false mark to the era of its mark; and the scoring period is scored as a series of its own, as the out-of-sample check is, so a January 2016 mark whose turning point lies in late December 2015 is a false mark.
 
 ## Definitions fixed in slice 3
 
@@ -179,7 +179,7 @@ Development data is every stored candle, fifteen-minute or hourly, that starts b
 uv run tradingbot out-of-sample one
 ```
 
-The one command that reads past the boundary. It replays the whole stored history of the detector's timeframe through the detector, so the detector carries every level it has by the boundary, and scores only the candles from the boundary on, as a series of their own and without eras. It prints the score in the same shape as `replay`, writes the chart data to `out-of-sample-<detector>.json` next to the store (or to `--out`), and appends one line to `out-of-sample.log` in the working directory: when it ran, the detector, the period and the score. Run it from the repository root, like every other command, so that file is committed with the code and every run is on record. A detector that is already in the log is refused: the protocol in issue #12 gives each detector one out-of-sample run, and the command runs only after a detector has passed its success criterion over the development period. The API and the dashboard never read past the boundary.
+The one command that reads past the boundary. It replays the whole stored history of the detector's timeframe through the detector, so the detector carries every level it has by the boundary, and scores only the candles from the boundary on, as a series of their own and without eras. It prints the score in the same shape as `replay`, writes the chart data (the whole run, the marks before the boundary unscored) to `out-of-sample-<detector>.json` next to the store (or to `--out`), and appends one line to `out-of-sample.log` in the working directory: when it ran, the detector, the period and the score. Run it from the repository root, like every other command, so that file is committed with the code and every run is on record. A detector that is already in the log is refused: the protocol in issue #12 gives each detector one out-of-sample run, and the command runs only after a detector has passed its success criterion over the development period. The API and the dashboard never read past the boundary.
 
 ## Run the checks
 
@@ -203,7 +203,8 @@ src/tradingbot/
   turning_points.py  turning points in hindsight, found one hourly candle at a time
   detectors.py       the Detector interface, Mark, Level, the floor detector, detector one and two
   scoring.py         tolerance B, the scoring period, the eras, and the score
-  replay.py          replay: candles to a detector one at a time, hours built from quarters, then the score
+  replay.py          replay: candles to a detector one at a time, hours built from 15-minute candles, then the score
+  re_score.py        a recorded run replayed on its own candles and scored under the current definitions
   hourly_check.py    the hourly candles built from 15-minute ones against the stored hourly table
   out_of_sample.py   the one explicit check past the boundary, logged per run
   api.py             the FastAPI app with GET /candles, /turning-points and /replay

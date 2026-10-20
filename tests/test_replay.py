@@ -7,7 +7,7 @@ import pytest
 
 from tradingbot.candles import Candle, Timeframe, period_start, resample
 from tradingbot.detectors import LEVEL_LIFETIME, DetectorTwo, FloorDetector, Level, Mark
-from tradingbot.replay import ReplayResult, collect, replay, run
+from tradingbot.replay import ReplayResult, replay, replay_all, run
 from tradingbot.scoring import match_marks
 from tradingbot.turning_points import Kind, TurningPoint, find_turning_points
 
@@ -173,21 +173,44 @@ def test_a_mark_in_a_flat_market_is_settled_only_by_the_last_candle() -> None:
     assert result.marks[0].settled_at == T0 + 99 * H
 
 
-def test_scoring_from_a_time_keeps_the_candles_marks_and_turning_points_from_then_on() -> None:
+def test_scoring_from_a_time_scores_the_marks_and_turning_points_from_then_on() -> None:
     candles = random_walk(hours=2000, seed=9)
     boundary = T0 + 1500 * H
     spy = Spy()
 
     result = run(candles, spy, score_from=boundary)
 
-    assert [c.time for c in result.candles] == [c.time for c in candles if c.time >= boundary]
-    assert [m.time for m in result.marks] == [c.time for c in candles if c.time >= boundary]
-    assert all(p.time >= boundary for p in result.turning_points)
+    assert result.scored_from == boundary
+    assert result.candles == candles, "the whole run is recorded"
+    assert [c.time for c in result.scored_candles] == [
+        c.time for c in candles if c.time >= boundary
+    ]
+    assert [m.time for m in result.marks] == [c.time for c in candles], "every mark is recorded"
+    assert [m.time for m in result.marks if m.scored] == [
+        c.time for c in candles if c.time >= boundary
+    ]
+    assert result.turning_points == find_turning_points(candles)
     assert result.score.marks == 500
     assert result.score.turning_points == len(
         [p for p in find_turning_points(candles) if p.time >= boundary]
     )
     assert result.score.turning_points > 3
+
+
+def test_a_mark_before_the_scored_time_is_unscored() -> None:
+    candles = random_walk(hours=2000, seed=9)
+    boundary = T0 + 1500 * H
+
+    result = run(candles, Spy(), score_from=boundary)
+
+    before = [m for m in result.marks if m.time < boundary]
+    assert len(before) == 1500
+    assert all(
+        (m.scored, m.hit, m.turning_point, m.timing, m.give_up, m.settled_at)
+        == (False, False, None, None, None, m.time)
+        for m in before
+    )
+    assert all(m.scored for m in result.marks if m.time >= boundary)
 
 
 def test_the_detector_still_sees_every_candle_before_the_scored_time() -> None:
@@ -208,9 +231,10 @@ def test_marks_scored_from_a_time_are_settled_by_a_kept_candle() -> None:
 
     result = run(candles, FloorDetector(), score_from=boundary)
 
-    kept = {c.time for c in result.candles}
-    assert result.marks, "the floor should place marks past the boundary"
-    for outcome in result.marks:
+    scored = [m for m in result.marks if m.scored]
+    kept = {c.time for c in result.scored_candles}
+    assert scored, "the floor should place marks past the boundary"
+    for outcome in scored:
         assert outcome.settled_at in kept
         assert outcome.settled_at >= outcome.time
 
@@ -229,27 +253,25 @@ def test_a_run_carries_the_levels_the_detector_read_with_their_spans() -> None:
     assert run(candles, Spy()).levels == []
 
 
-def test_scoring_from_a_time_keeps_the_levels_still_seen_from_then_on() -> None:
+def test_scoring_from_a_time_records_every_level_the_detector_read() -> None:
     candles = random_walk(hours=2000, seed=12)
     boundary = T0 + 1500 * H
 
     whole = run(candles, DetectorTwo())
-    kept = run(candles, DetectorTwo(), score_from=boundary)
+    scored = run(candles, DetectorTwo(), score_from=boundary)
 
-    assert kept.levels == [
-        level
-        for level in whole.levels
-        if level.active_until is not None and level.active_until >= boundary
-    ]
-    assert any(level.time < boundary for level in kept.levels), (
-        "a level from before the boundary that is still seen after it is kept"
-    )
+    assert scored.levels == whole.levels
+    assert scored.score != whole.score
 
 
 def test_scoring_from_before_the_first_candle_changes_nothing() -> None:
     candles = random_walk(hours=500, seed=11)
 
-    assert run(candles, FloorDetector(), score_from=T0 - H) == run(candles, FloorDetector())
+    scored = run(candles, FloorDetector(), score_from=T0 - H)
+    whole = run(candles, FloorDetector())
+
+    assert (scored.marks, scored.score, scored.candles) == (whole.marks, whole.score, whole.candles)
+    assert (scored.scored_from, whole.scored_from) == (T0 - H, None)
 
 
 def test_each_hourly_step_completes_its_own_candle_as_the_hourly_candle() -> None:
@@ -297,7 +319,7 @@ def test_a_fifteen_minute_replay_builds_the_hourly_candles_as_hours_complete() -
 def test_the_hourly_candles_built_in_a_fifteen_minute_replay_equal_the_resampled_ones() -> None:
     quarters = quarter_walk(hours=300, seed=21)
 
-    replayed = collect(quarters, Spy(Timeframe.M15))
+    replayed = replay_all(quarters, Spy(Timeframe.M15))
 
     assert replayed.hourly == resample(quarters, Timeframe.H1)
     assert replayed.candles == quarters

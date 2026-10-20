@@ -87,14 +87,21 @@
 						time: m.time,
 						price: m.price,
 						timing: m.timing,
-						state: m.settled_at <= now ? (m.hit ? 'hit' : 'false') : 'pending'
+						state: !m.scored
+							? 'unscored'
+							: m.settled_at <= now
+								? m.hit
+									? 'hit'
+									: 'false'
+								: 'pending'
 					}))
 			: []
 	);
 	const tally = $derived({
 		hits: shownMarks.filter((m) => m.state === 'hit').length,
 		false: shownMarks.filter((m) => m.state === 'false').length,
-		pending: shownMarks.filter((m) => m.state === 'pending').length
+		pending: shownMarks.filter((m) => m.state === 'pending').length,
+		unscored: shownMarks.filter((m) => m.state === 'unscored').length
 	});
 
 	let frame: number | undefined;
@@ -236,13 +243,13 @@
 				{/if}
 			{:else if replay}
 				{#if total === 0}
-					No {replay.timeframe} candles in the scoring period (2016-01-01 to 2024-10-19). Import
-					an archive that covers it.
+					No {replay.timeframe} candles in the development period (before 2024-10-19). Import an
+					archive that covers it.
 				{:else}
 					{replay.timeframe} candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
 						? `, ${utc(now)}`
 						: ''}: {shownPoints.length} turning points confirmed, {shownLevels.length} levels active,
-					{shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending
+					{shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending, {tally.unscored} before the scoring period
 				{/if}
 			{/if}
 		</p>
@@ -275,8 +282,9 @@
 		<span class="dot"></span> turning point (8% reversal, in hindsight) · <span class="level"
 			>orange line</span
 		> level the detector sees (zone within 1%) · <span class="arrow">▼</span> top mark ·
-		<span class="arrow">▲</span> bottom mark · <span class="pending">grey</span> pending ·
-		<span class="hit">green</span> hit · <span class="false">red</span> false mark
+		<span class="arrow">▲</span> bottom mark · <span class="unscored">light grey</span> before the
+		scoring period (2016) · <span class="pending">grey</span> pending · <span class="hit">green</span>
+		hit · <span class="false">red</span> false mark
 	</p>
 </main>
 
@@ -382,6 +390,9 @@
 	}
 	.level {
 		color: #ff9800;
+	}
+	.unscored {
+		color: #bdbdbd;
 	}
 	.pending {
 		color: #9e9e9e;

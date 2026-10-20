@@ -8,9 +8,9 @@ built from every hour it covers. `GET /turning-points?timeframe=...` answers
 the hindsight turning points of the whole development period, always found on
 the hourly candles, placed on the candle of the requested timeframe that holds
 the extreme. `GET /replay?detector=...` replays the development period through
-a detector, on the candles of the detector's timeframe, and answers the levels
-it read, its marks, their outcomes and the score over the scoring period, per
-era.
+a detector, on the candles of the detector's timeframe, and answers every
+candle it read, the levels, every mark with its outcome where the scoring
+period scored it, and the score over the scoring period, per era.
 
 Every route reads through `read_development`, so nothing past the
 out-of-sample boundary is ever served.
@@ -49,6 +49,8 @@ class ReplayOut(BaseModel):
     detector: str
     timeframe: str
     """The timeframe of `candles`: what the detector read."""
+    scored_from: int | None
+    """Start of the scored period; marks before it are unscored."""
     candles: list[Candle]
     turning_points: list[TurningPoint]
     levels: list[Level]
@@ -60,6 +62,7 @@ class ReplayOut(BaseModel):
         return cls(
             detector=result.detector,
             timeframe=result.timeframe.value,
+            scored_from=result.scored_from,
             candles=result.candles,
             turning_points=result.turning_points,
             levels=result.levels,
@@ -107,11 +110,11 @@ def on_timeframe(point: TurningPoint, timeframe: Timeframe) -> TurningPoint:
     )
 
 
-def on_fifteen_minutes(point: TurningPoint, quarters: dict[int, Candle]) -> TurningPoint:
+def on_fifteen_minutes(point: TurningPoint, by_time: dict[int, Candle]) -> TurningPoint:
     """The turning point placed on the fifteen-minute candle of its hour that holds the
     extreme, or on the start of the hour when no stored candle of the hour holds it."""
-    for quarter in range(4):
-        candle = quarters.get(point.time + quarter * Timeframe.M15.seconds)
+    for i in range(4):
+        candle = by_time.get(point.time + i * Timeframe.M15.seconds)
         if candle is None:
             continue
         extreme = candle.high if point.kind is Kind.TOP else candle.low
@@ -149,8 +152,8 @@ def create_app(db_path: str | Path) -> FastAPI:
     def turning_points(timeframe: Timeframe) -> TurningPointsOut:
         points = find_turning_points(read())
         if timeframe is Timeframe.M15:
-            quarters = {c.time: c for c in read(Timeframe.M15)}
-            placed = [on_fifteen_minutes(p, quarters) for p in points]
+            by_time = {c.time: c for c in read(Timeframe.M15)}
+            placed = [on_fifteen_minutes(p, by_time) for p in points]
         else:
             placed = [on_timeframe(p, timeframe) for p in points]
         return TurningPointsOut(timeframe=timeframe.value, turning_points=placed)

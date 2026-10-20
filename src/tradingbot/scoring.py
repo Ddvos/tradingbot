@@ -136,12 +136,12 @@ def describe_score(score: Score) -> list[tuple[str, str]]:
         ("median timing", timing),
         ("median give-up", give_up_),
     ]
-    for era in score.eras:
-        s = era.score
+    for scored in score.eras:
+        s = scored.score
         era_timing, era_give_up = describe_timing(s)
         lines.append(
             (
-                era.era.name,
+                scored.era.name,
                 f"{s.turning_points} turning points, {s.marks} marks, {s.hits} hits "
                 f"(hit rate {s.hit_rate:.1%}), {s.false_marks} false marks "
                 f"(false-mark rate {s.false_mark_rate:.1%}), median timing {era_timing}, "

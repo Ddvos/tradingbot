@@ -54,20 +54,21 @@ def period_start(time: int, timeframe: Timeframe) -> int:
     return time - time % timeframe.seconds
 
 
-def merge(period: Candle | None, candle: Candle, start: int) -> Candle:
-    """`period` extended by `candle`, or started by it when there is no period yet."""
-    if period is None:
+def merge(current: Candle | None, candle: Candle, start: int) -> Candle:
+    """The candle of the period starting at `start` so far, `current`, extended by `candle`;
+    started by it when there is no candle of the period yet."""
+    if current is None:
         return Candle(
             start, candle.open, candle.high, candle.low, candle.close, candle.volume, candle.trades
         )
     return Candle(
         start,
-        period.open,
-        max(period.high, candle.high),
-        min(period.low, candle.low),
+        current.open,
+        max(current.high, candle.high),
+        min(current.low, candle.low),
         candle.close,
-        period.volume + candle.volume,
-        period.trades + candle.trades,
+        current.volume + candle.volume,
+        current.trades + candle.trades,
     )
 
 

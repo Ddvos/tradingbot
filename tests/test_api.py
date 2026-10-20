@@ -218,6 +218,7 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
         "kind": "top",
         "time": DAY_START + H,
         "price": 93.0,
+        "scored": True,
         "hit": False,
         "turning_point": None,
         "timing": None,
@@ -258,6 +259,7 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
     }
     assert body["levels"] == []  # the floor reads no levels
     assert body["timeframe"] == "1h"
+    assert body["scored_from"] == 1451606400
 
 
 def test_a_replay_answers_the_levels_the_detector_read_with_their_spans(
