@@ -232,6 +232,7 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
         "false_marks": 0,
         "hit_rate": 0.0,
         "false_mark_rate": 0.0,
+        "false_marks_per_hit": 0.0,
         "median_timing": None,
         "median_give_up": None,
         "eras": [],
@@ -243,6 +244,7 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
         "false_marks": 4,
         "hit_rate": 0.0,
         "false_mark_rate": 1.0,
+        "false_marks_per_hit": 0.0,
         "median_timing": None,
         "median_give_up": None,
     }

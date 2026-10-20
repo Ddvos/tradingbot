@@ -19,7 +19,7 @@ its give-up is measured from that close.
 
 The score covers the scoring period, from 2016 on, and is also given per era
 (ADR-0005). A hit belongs to the era of its turning point, a false mark to the
-era of its mark.
+era of its mark. False marks are reported per hit and carry no bar (ADR-0007).
 """
 
 from __future__ import annotations
@@ -71,6 +71,9 @@ ERAS = (
 )
 """The eras of the scoring period (ADR-0005); the hit-rate bar must hold in every one."""
 
+HARNESS_ADR = "ADR-0007"
+"""The ADR that last changed the score (ADR-0004): a re-scoring names it."""
+
 
 @dataclass(frozen=True, slots=True)
 class Hit:
@@ -100,6 +103,8 @@ class Score:
     """Hits divided by turning points; 0 without turning points."""
     false_mark_rate: float
     """False marks divided by marks; 0 without marks."""
+    false_marks_per_hit: float
+    """False marks divided by hits (ADR-0007); 0 without hits."""
     median_timing: float | None
     """Median timing of the hits in hourly candles; None without hits."""
     median_give_up: float | None
@@ -124,6 +129,14 @@ def describe_timing(score: Score) -> tuple[str, str]:
     return f"{score.median_timing:+.1f} candles ({early_or_late})", f"{score.median_give_up:.2f}%"
 
 
+def describe_per_hit(score: Score) -> str:
+    """The false marks per hit as the commands print them: n/a when marks found no hit at
+    all, since zero per hit would read as a clean run."""
+    if score.marks and not score.hits:
+        return "n/a (no hits)"
+    return f"{score.false_marks_per_hit:.1f} per hit"
+
+
 def describe_score(score: Score) -> list[tuple[str, str]]:
     """The score as (label, value) pairs, in the order the commands print them: the
     period's numbers one per line, then one line per era."""
@@ -133,6 +146,7 @@ def describe_score(score: Score) -> list[tuple[str, str]]:
         ("marks", str(score.marks)),
         ("hits", f"{score.hits}  (hit rate {score.hit_rate:.1%})"),
         ("false marks", f"{score.false_marks}  (false-mark rate {score.false_mark_rate:.1%})"),
+        ("false marks/hit", describe_per_hit(score)),
         ("median timing", timing),
         ("median give-up", give_up_),
     ]
@@ -144,8 +158,8 @@ def describe_score(score: Score) -> list[tuple[str, str]]:
                 scored.era.name,
                 f"{s.turning_points} turning points, {s.marks} marks, {s.hits} hits "
                 f"(hit rate {s.hit_rate:.1%}), {s.false_marks} false marks "
-                f"(false-mark rate {s.false_mark_rate:.1%}), median timing {era_timing}, "
-                f"median give-up {era_give_up}",
+                f"(false-mark rate {s.false_mark_rate:.1%}), {describe_per_hit(s)}, "
+                f"median timing {era_timing}, median give-up {era_give_up}",
             )
         )
     return lines
@@ -228,6 +242,7 @@ def score(outcome: Outcome, eras: Sequence[Era] = ()) -> Score:
         false_marks=len(outcome.false_marks),
         hit_rate=len(hits) / points if points else 0.0,
         false_mark_rate=len(outcome.false_marks) / marks if marks else 0.0,
+        false_marks_per_hit=len(outcome.false_marks) / len(hits) if hits else 0.0,
         median_timing=median(hit.timing for hit in hits) if hits else None,
         median_give_up=median(hit.give_up for hit in hits) if hits else None,
         eras=tuple(EraScore(era, score(within(outcome, era))) for era in eras),

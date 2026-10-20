@@ -11,6 +11,7 @@ from tradingbot.detectors import FloorDetector
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY
 from tradingbot.re_score import RecordedRun, Refused, first_difference, re_score
 from tradingbot.replay import run
+from tradingbot.scoring import describe_score
 from tradingbot.turning_points import Kind
 
 H = 3600
@@ -58,6 +59,20 @@ def test_re_scoring_replays_the_recorded_candles_and_keeps_the_marks(tmp_path: P
 
     assert scored.marks == len(recorded.marks) > 0
     assert scored.result.candles == recorded.candles
+
+
+RECORDED_THREE = Path("data/replay-three.json")
+"""The recorded run of detector three (#20), kept out of git like all of `data/`."""
+
+
+@pytest.mark.skipif(not RECORDED_THREE.exists(), reason=f"{RECORDED_THREE} is not on disk")
+def test_the_recorded_run_of_detector_three_scores_six_and_a_half_false_marks_per_hit() -> None:
+    # The development run on #20: 719 hits and 4,698 false marks over the scoring period.
+    scored = re_score(RecordedRun.read(RECORDED_THREE), _named("three"), RECORDED_THREE)
+
+    assert (scored.result.score.hits, scored.result.score.false_marks) == (719, 4698)
+    assert round(scored.result.score.false_marks_per_hit, 1) == 6.5
+    assert ("false marks/hit", "6.5 per hit") in describe_score(scored.result.score)
 
 
 def test_re_scoring_refuses_another_detectors_run(tmp_path: Path) -> None:
