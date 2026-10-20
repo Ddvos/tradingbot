@@ -1,12 +1,20 @@
 """Replay: candles go to the detector one at a time, so nothing later is ever visible."""
 
-import random
 from collections.abc import Sequence
 
 import pytest
 
+from tests.walks import quarter_walk, random_walk
 from tradingbot.candles import Candle, Timeframe, period_start, resample
-from tradingbot.detectors import LEVEL_LIFETIME, DetectorTwo, FloorDetector, Level, Mark
+from tradingbot.detectors import (
+    LEVEL_LIFETIME,
+    DetectorThree,
+    DetectorTwo,
+    FloorDetector,
+    Level,
+    Mark,
+    SwingExtreme,
+)
 from tradingbot.replay import ReplayResult, replay, replay_all, run
 from tradingbot.scoring import match_marks
 from tradingbot.turning_points import Kind, TurningPoint, find_turning_points
@@ -14,37 +22,6 @@ from tradingbot.turning_points import Kind, TurningPoint, find_turning_points
 H = 3600
 Q = 900  # a quarter of an hour
 T0 = 1_704_067_200  # 2024-01-01T00:00:00Z
-
-
-def random_walk(hours: int, seed: int) -> list[Candle]:
-    """A seeded hourly random walk with hourly moves of up to 3%."""
-    rng = random.Random(seed)
-    candles: list[Candle] = []
-    close = 1000.0
-    for hour in range(hours):
-        open_ = close
-        close = open_ * (1 + rng.uniform(-0.03, 0.03))
-        high = max(open_, close) * (1 + rng.uniform(0, 0.01))
-        low = min(open_, close) * (1 - rng.uniform(0, 0.01))
-        candles.append(Candle(T0 + hour * H, open_, high, low, close, 1.0, 1))
-    return candles
-
-
-def quarter_walk(hours: int, seed: int) -> list[Candle]:
-    """A seeded fifteen-minute random walk with moves of up to 1.5% a quarter; the :30
-    candle of every seventh hour had no trades."""
-    rng = random.Random(seed)
-    candles: list[Candle] = []
-    close = 1000.0
-    for quarter in range(hours * 4):
-        if quarter % 28 == 2:
-            continue
-        open_ = close
-        close = open_ * (1 + rng.uniform(-0.015, 0.015))
-        high = max(open_, close) * (1 + rng.uniform(0, 0.005))
-        low = min(open_, close) * (1 - rng.uniform(0, 0.005))
-        candles.append(Candle(T0 + quarter * Q, open_, high, low, close, 1.0, 1))
-    return candles
 
 
 class Spy:
@@ -63,6 +40,9 @@ class Spy:
         return Kind.TOP
 
     def levels(self, points: Sequence[TurningPoint]) -> list[Level]:
+        return []
+
+    def swing_extremes(self) -> list[SwingExtreme]:
         return []
 
 
@@ -251,6 +231,41 @@ def test_a_run_carries_the_levels_the_detector_read_with_their_spans() -> None:
     ]
     assert run(candles, FloorDetector()).levels == []
     assert run(candles, Spy()).levels == []
+
+
+def test_a_run_carries_every_swing_extreme_the_detector_read_with_its_span() -> None:
+    quarters = quarter_walk(hours=600, seed=24)
+    by_time = {c.time: c for c in quarters}
+
+    result = run(quarters, DetectorThree())
+
+    extremes = result.swing_extremes
+    assert len(extremes) > 100, "the walk should set many extremes"
+    assert extremes == sorted(extremes, key=lambda e: e.active_from)
+    for extreme in extremes:
+        candle = by_time[extreme.time]
+        assert extreme.price == (candle.high if extreme.kind is Kind.TOP else candle.low)
+        assert extreme.active_from >= extreme.time
+        assert extreme.active_until is None or extreme.active_until >= extreme.active_from
+    for kind in Kind:
+        of_kind = [e for e in extremes if e.kind is kind]
+        assert [e.active_until for e in of_kind[:-1]] == [
+            quarters[quarters.index(by_time[e.active_from]) - 1].time for e in of_kind[1:]
+        ], "each extreme stands until the candle before the next one is read"
+        assert of_kind[-1].active_until is None
+    assert run(quarters, Spy(Timeframe.M15)).swing_extremes == []
+    assert run(random_walk(hours=600, seed=24), FloorDetector()).swing_extremes == []
+
+
+def test_scoring_from_a_time_records_every_swing_extreme_the_detector_read() -> None:
+    quarters = quarter_walk(hours=600, seed=25)
+    boundary = T0 + 400 * H
+
+    whole = run(quarters, DetectorThree())
+    scored = run(quarters, DetectorThree(), score_from=boundary)
+
+    assert scored.swing_extremes == whole.swing_extremes
+    assert scored.swing_extremes[0].active_from < boundary
 
 
 def test_scoring_from_a_time_records_every_level_the_detector_read() -> None:

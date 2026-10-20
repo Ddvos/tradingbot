@@ -131,6 +131,7 @@ def test_replay_prints_the_floor_score_and_writes_the_chart_data(
         "candles",
         "turning_points",
         "levels",
+        "swing_extremes",
         "marks",
         "score",
     }
@@ -374,6 +375,31 @@ def two_table_db(path: Path, *, break_an_hour: bool) -> Path:
         fifteen.upsert(quarters)
         hourly.upsert(hours)
     return db
+
+
+def test_replay_knows_detector_three_and_reads_the_fifteen_minute_table(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = two_table_db(tmp_path, break_an_hour=False)
+    out = tmp_path / "replay-three.json"
+
+    main(["replay", "three", "--db", str(db), "--out", str(out)])
+
+    assert "Replayed three over 7 candles from 2024-01-01T00:00:00Z" in capsys.readouterr().out
+    data = json.loads(out.read_text())
+    assert data["detector"] == "three"
+    assert data["timeframe"] == "15m"
+    # Hour 1's low of 96 is 12.7% below hour 0's high: a top, confirmed on the last candle,
+    # from which the detector reads the swing extreme, that candle's own high.
+    assert data["swing_extremes"] == [
+        {
+            "kind": "top",
+            "price": 101.0,
+            "time": DAY_START + 7 * Q,
+            "active_from": DAY_START + 7 * Q,
+            "active_until": None,
+        }
+    ]
 
 
 def test_check_hourly_finds_no_difference_when_the_tables_agree(

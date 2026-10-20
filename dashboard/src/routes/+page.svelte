@@ -12,7 +12,7 @@
 		type Timeframe,
 		type TurningPoint
 	} from '#lib/api.ts';
-	import type { ChartLevel, ChartMark } from '#lib/chart.ts';
+	import { COLORS, toLines, type ChartLine, type ChartMark } from '#lib/chart.ts';
 
 	type Mode = 'hindsight' | 'replay';
 	const SPEEDS = [1, 10, 100, 1000];
@@ -71,12 +71,12 @@
 	const now = $derived(replay && cursor > 0 ? replay.candles[cursor - 1].time : -Infinity);
 	const shownPoints = $derived(replay ? replay.turning_points.filter((p) => p.confirmed_at <= now) : []);
 	/** The levels the detector sees at the latest shown candle, drawn up to that candle. */
-	const shownLevels = $derived<ChartLevel[]>(
-		replay
-			? replay.levels
-					.filter((l) => l.active_from <= now && (l.active_until === null || now <= l.active_until))
-					.map((l) => ({ kind: l.kind, time: l.time, price: l.price, from: l.active_from, to: now }))
-			: []
+	const shownLevels = $derived<ChartLine[]>(
+		replay ? toLines(replay.levels, now, 'level', COLORS.level) : []
+	);
+	/** The swing extremes the detector reads at the latest shown candle, drawn likewise. */
+	const shownExtremes = $derived<ChartLine[]>(
+		replay ? toLines(replay.swing_extremes, now, 'extreme', COLORS.swingExtreme) : []
 	);
 	const shownMarks = $derived<ChartMark[]>(
 		replay
@@ -249,7 +249,7 @@
 					{replay.timeframe} candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
 						? `, ${utc(now)}`
 						: ''}: {shownPoints.length} turning points confirmed, {shownLevels.length} levels active,
-					{shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending, {tally.unscored} before the scoring period
+					{shownExtremes.length} swing extremes standing, {shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending, {tally.unscored} before the scoring period
 				{/if}
 			{/if}
 		</p>
@@ -274,14 +274,16 @@
 			candles={replay?.candles ?? []}
 			visible={cursor}
 			turningPoints={shownPoints}
-			levels={shownLevels}
+			lines={[...shownLevels, ...shownExtremes]}
 			marks={shownMarks}
 		/>
 	{/if}
 	<p class="legend">
 		<span class="dot"></span> turning point (8% reversal, in hindsight) · <span class="level"
 			>orange line</span
-		> level the detector sees (zone within 1%) · <span class="arrow">▼</span> top mark ·
+		> level the detector sees (zone within 1%) · <span class="extreme">purple line</span> swing
+		extreme the detector reads (a mark on the first candle short of it, once the swing is 8%) ·
+		<span class="arrow">▼</span> top mark ·
 		<span class="arrow">▲</span> bottom mark · <span class="unscored">light grey</span> before the
 		scoring period (2016) · <span class="pending">grey</span> pending · <span class="hit">green</span>
 		hit · <span class="false">red</span> false mark
@@ -390,6 +392,9 @@
 	}
 	.level {
 		color: #ff9800;
+	}
+	.extreme {
+		color: #8e24aa;
 	}
 	.unscored {
 		color: #bdbdbd;

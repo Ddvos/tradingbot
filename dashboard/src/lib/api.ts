@@ -38,6 +38,19 @@ export interface Level {
 	active_until: number | null;
 }
 
+/** A swing extreme as detector three read it, with the span of candles that read it. */
+export interface SwingExtreme {
+	/** 'top' for the extreme of an up-swing, a possible top; 'bottom' for a down-swing's. */
+	kind: Kind;
+	price: number;
+	/** Start time of the fifteen-minute candle holding the extreme. */
+	time: number;
+	/** Start time of the first candle the detector read it on. */
+	active_from: number;
+	/** Start time of the last candle that read it; null when it still stands at the end. */
+	active_until: number | null;
+}
+
 /** A detector's mark and what became of it. */
 export interface MarkOutcome {
 	kind: Kind;
@@ -94,11 +107,13 @@ export interface Replay {
 	turning_points: TurningPoint[];
 	/** The levels the detector read; empty for a detector that reads none. */
 	levels: Level[];
+	/** The swing extremes the detector read; empty for a detector that tracks no swing. */
+	swing_extremes: SwingExtreme[];
 	marks: MarkOutcome[];
 	score: Score;
 }
 
-export const DETECTORS = ['floor', 'one', 'two'];
+export const DETECTORS = ['floor', 'one', 'two', 'three'];
 
 // Declared in src/env.ts; set PUBLIC_API_URL in dashboard/.env to read from somewhere else.
 const API_URL = PUBLIC_API_URL;
@@ -125,7 +140,7 @@ export async function fetchTurningPoints(timeframe: Timeframe): Promise<TurningP
 	return body.turning_points;
 }
 
-/** The development period replayed through a detector, scored over the scoring period: candles, levels, marks, outcomes, score per era. */
+/** The development period replayed through a detector, scored over the scoring period: candles, levels, swing extremes, marks, outcomes, score per era. */
 export async function fetchReplay(detector: string): Promise<Replay> {
 	return get<Replay>(`/replay?detector=${encodeURIComponent(detector)}`);
 }

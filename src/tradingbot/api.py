@@ -9,8 +9,9 @@ the hindsight turning points of the whole development period, always found on
 the hourly candles, placed on the candle of the requested timeframe that holds
 the extreme. `GET /replay?detector=...` replays the development period through
 a detector, on the candles of the detector's timeframe, and answers every
-candle it read, the levels, every mark with its outcome where the scoring
-period scored it, and the score over the scoring period, per era.
+candle it read, the levels and the swing extremes it read, every mark with its
+outcome where the scoring period scored it, and the score over the scoring
+period, per era.
 
 Every route reads through `read_development`, so nothing past the
 out-of-sample boundary is ever served.
@@ -27,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from tradingbot.candles import Candle, Timeframe, period_start, resample
-from tradingbot.detectors import DETECTORS, Level
+from tradingbot.detectors import DETECTORS, Level, SwingExtreme
 from tradingbot.development import read_development
 from tradingbot.replay import MarkOutcome, ReplayResult, run
 from tradingbot.scoring import SCORING_START, Score
@@ -54,6 +55,7 @@ class ReplayOut(BaseModel):
     candles: list[Candle]
     turning_points: list[TurningPoint]
     levels: list[Level]
+    swing_extremes: list[SwingExtreme]
     marks: list[MarkOutcome]
     score: Score
 
@@ -66,6 +68,7 @@ class ReplayOut(BaseModel):
             candles=result.candles,
             turning_points=result.turning_points,
             levels=result.levels,
+            swing_extremes=result.swing_extremes,
             marks=result.marks,
             score=result.score,
         )

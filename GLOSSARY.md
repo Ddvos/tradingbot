@@ -126,6 +126,18 @@ _Avoid_: wave, move, leg
 The highest high of the current up-swing, or the lowest low of the current down-swing, so far. If the swing ends there, it is the turning point's extreme.
 _Avoid_: swing high, swing low, running high, running low
 
+**Swing low**:
+Where the current up-swing starts: the lowest fifteen-minute low at or after the start of the hour holding the last confirmed top. Not a bottom, and not the swing extreme. Before any top is confirmed there is none.
+_Avoid_: bottom, low, support, anchor
+
+**Swing high**:
+Where the current down-swing starts: the highest fifteen-minute high at or after the start of the hour holding the last confirmed bottom. The mirror of the swing low.
+_Avoid_: top, high, resistance, anchor
+
+**Armed**:
+A side of a detector that may place its next mark: armed by a new swing extreme, by a new swing low or swing high, or by a newly confirmed turning point of its kind, and disarmed by the mark it places.
+_Avoid_: active, ready, triggered, enabled
+
 **Detector one**:
 The first candidate detector: a mark inside a zone on the candle that fails a run of at least three higher highs (a top) or lower lows (a bottom).
 _Avoid_: the detector, v1, the levels detector
