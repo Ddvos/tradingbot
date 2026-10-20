@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe
 from tradingbot.kraken import KrakenSpot, read_archive
 
 H = 3600
@@ -61,7 +61,7 @@ def test_rest_endpoint_rows_become_candles() -> None:
 
     source = KrakenSpot(http=httpx.Client(transport=httpx.MockTransport(handler)))
 
-    candles = source.hourly_candles(since=1792400400)
+    candles = source.candles(Timeframe.H1, since=1792400400)
 
     assert candles == [
         Candle(1792400400, 82734.5, 82999.7, 82643.9, 82675.1, 51.99652256, 4725),
@@ -79,7 +79,7 @@ def test_rest_endpoint_errors_are_raised() -> None:
     source = KrakenSpot(http=httpx.Client(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(RuntimeError, match="EGeneral:Invalid arguments"):
-        source.hourly_candles(since=None)
+        source.candles(Timeframe.H1, since=None)
 
 
 def test_rest_endpoint_is_asked_for_everything_when_since_is_none() -> None:
@@ -89,6 +89,22 @@ def test_rest_endpoint_is_asked_for_everything_when_since_is_none() -> None:
         seen.append(request.url)
         return httpx.Response(200, content=json.dumps(OHLC_RESPONSE))
 
-    KrakenSpot(http=httpx.Client(transport=httpx.MockTransport(handler))).hourly_candles(None)
+    KrakenSpot(http=httpx.Client(transport=httpx.MockTransport(handler))).candles(
+        Timeframe.H1, None
+    )
 
     assert "since" not in seen[0].params
+
+
+def test_fifteen_minute_candles_are_asked_for_with_interval_15() -> None:
+    seen: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url)
+        return httpx.Response(200, json=OHLC_RESPONSE)
+
+    KrakenSpot(http=httpx.Client(transport=httpx.MockTransport(handler))).candles(
+        Timeframe.M15, since=1792400400
+    )
+
+    assert dict(seen[0].params) == {"pair": "XBTUSD", "interval": "15", "since": "1792400400"}

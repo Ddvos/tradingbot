@@ -2,10 +2,22 @@
 
 from tradingbot.candles import Candle
 from tradingbot.detectors import Mark
-from tradingbot.scoring import Hit, Score, match_marks, score
+from tradingbot.scoring import (
+    ERAS,
+    SCORING_START,
+    Era,
+    EraScore,
+    Hit,
+    Outcome,
+    Score,
+    describe_score,
+    match_marks,
+    score,
+)
 from tradingbot.turning_points import Kind, TurningPoint
 
 H = 3600
+Q = 900
 T0 = 1_704_067_200  # 2024-01-01T00:00:00Z
 
 
@@ -117,3 +129,159 @@ def test_a_score_without_hits_has_no_timing_or_give_up() -> None:
     assert result == Score(
         0, 0, 0, 0, hit_rate=0.0, false_mark_rate=0.0, median_timing=None, median_give_up=None
     )
+
+
+def series_with_a_top_whose_candle_closes_five_percent_below_it() -> list[Candle]:
+    """Flat at 100 but for hour 10, whose high is 100 and whose close is 95."""
+    candles = flat_series(100)
+    candles[10] = Candle(at(10), 100.0, 100.0, 94.0, 95.0, 1.0, 1)
+    return candles
+
+
+def test_under_tolerance_b_a_mark_at_the_extreme_candles_close_is_a_hit() -> None:
+    point = top(10, 100.0)
+    at_the_close = Mark(Kind.TOP, at(12), price=95.0)
+
+    outcome = match_marks(
+        series_with_a_top_whose_candle_closes_five_percent_below_it(), [at_the_close], [point]
+    )
+
+    assert outcome.hits == [Hit(at_the_close, point, timing=2, give_up=5.0)]
+
+
+def test_under_tolerance_b_a_mark_further_out_than_the_extreme_candles_close_is_false() -> None:
+    point = top(10, 100.0)
+    further = Mark(Kind.TOP, at(12), price=94.9)
+
+    outcome = match_marks(
+        series_with_a_top_whose_candle_closes_five_percent_below_it(), [further], [point]
+    )
+
+    assert outcome.hits == []
+    assert outcome.false_marks == [further]
+    assert outcome.misses == [point]
+
+
+def test_under_tolerance_b_two_percent_still_holds_when_the_extreme_candle_closes_nearer() -> None:
+    # The bottom's own candle closes 0.5% above its low; a mark 1.9% above is still a hit.
+    candles = flat_series(100)
+    candles[30] = Candle(at(30), 100.0, 100.0, 50.0, 50.25, 1.0, 1)
+    point = bottom(30, 50.0)
+    within_two_percent = Mark(Kind.BOTTOM, at(33), price=50.95)
+    beyond = Mark(Kind.BOTTOM, at(34), price=51.05)
+
+    outcome = match_marks(candles, [within_two_percent, beyond], [point])
+
+    assert [hit.mark for hit in outcome.hits] == [within_two_percent]
+    assert outcome.false_marks == [beyond]
+
+
+def test_a_fifteen_minute_mark_is_scored_by_the_hour_it_falls_in() -> None:
+    point = top(10, 100.0)
+    at_quarter_past = Mark(Kind.TOP, at(13) + Q, price=99.0)
+    at_quarter_to = Mark(Kind.TOP, at(13) + 3 * Q, price=99.5)
+
+    outcome = match_marks(flat_series(100), [at_quarter_to, at_quarter_past], [point])
+
+    # Both lie in hour 13, three hourly candles late; the earlier one takes the hit.
+    assert outcome.hits == [Hit(at_quarter_past, point, timing=3, give_up=1.0)]
+    assert outcome.false_marks == [at_quarter_to]
+
+
+def test_the_scoring_period_starts_in_2016_and_has_three_eras() -> None:
+    assert SCORING_START == 1_451_606_400  # 2016-01-01T00:00:00Z
+    assert ERAS == (
+        Era("2016-2018", 1_451_606_400, 1_546_300_800),
+        Era("2019-2021", 1_546_300_800, 1_640_995_200),
+        Era("2022-2024", 1_640_995_200, 1_735_689_600),
+    )
+    assert ERAS[0].start == SCORING_START
+
+
+def in_era(era: Era, hours: int) -> int:
+    return era.start + hours * H
+
+
+def test_the_score_is_split_per_era() -> None:
+    first, second, third = ERAS
+    candles = [
+        Candle(t, 100.0, 100.0, 100.0, 100.0, 1.0, 1) for t in range(first.start, third.end, H)
+    ]
+    hit_in_first = TurningPoint(Kind.TOP, in_era(first, 10), 100.0, in_era(first, 15))
+    missed_in_first = TurningPoint(Kind.BOTTOM, in_era(first, 100), 100.0, in_era(first, 105))
+    hit_in_third = TurningPoint(Kind.TOP, in_era(third, 10), 100.0, in_era(third, 15))
+    marks = [
+        Mark(Kind.TOP, in_era(first, 12), 99.0),  # hit, 2 late, give-up 1%
+        Mark(Kind.BOTTOM, in_era(second, 50), 100.0),  # false, in the second era
+        Mark(Kind.TOP, in_era(third, 9), 99.5),  # hit, 1 early, give-up 0.5%
+        Mark(Kind.TOP, in_era(third, 500), 100.0),  # false, in the third era
+    ]
+
+    result = score(match_marks(candles, marks, [hit_in_first, missed_in_first, hit_in_third]), ERAS)
+
+    assert (result.turning_points, result.marks, result.hits, result.false_marks) == (3, 4, 2, 2)
+    assert result.median_timing == 0.5
+    assert [e.era.name for e in result.eras] == ["2016-2018", "2019-2021", "2022-2024"]
+    assert result.eras[0] == EraScore(
+        first,
+        Score(
+            turning_points=2,
+            marks=1,
+            hits=1,
+            false_marks=0,
+            hit_rate=0.5,
+            false_mark_rate=0.0,
+            median_timing=2,
+            median_give_up=1.0,
+        ),
+    )
+    assert result.eras[1].score == Score(
+        0, 1, 0, 1, hit_rate=0.0, false_mark_rate=1.0, median_timing=None, median_give_up=None
+    )
+    assert result.eras[2].score == Score(
+        1, 2, 1, 1, hit_rate=1.0, false_mark_rate=0.5, median_timing=-1, median_give_up=0.5
+    )
+
+
+def test_a_hit_across_an_era_boundary_counts_in_its_turning_points_era() -> None:
+    first, second, _ = ERAS
+    candles = [
+        Candle(t, 100.0, 100.0, 100.0, 100.0, 1.0, 1) for t in range(first.start, second.end, H)
+    ]
+    point = TurningPoint(Kind.TOP, in_era(second, 1), 100.0, in_era(second, 5))
+    mark = Mark(Kind.TOP, in_era(second, -2), 99.0)  # the last day of 2018
+
+    result = score(match_marks(candles, [mark], [point]), ERAS)
+
+    assert (result.eras[0].score.hits, result.eras[0].score.marks) == (0, 0)
+    assert (result.eras[1].score.hits, result.eras[1].score.marks) == (1, 1)
+
+
+def test_describe_score_prints_one_line_per_era() -> None:
+    whole = Score(
+        3, 4, 2, 2, hit_rate=2 / 3, false_mark_rate=0.5, median_timing=0.5, median_give_up=1.5
+    )
+    era = Score(
+        2, 1, 1, 0, hit_rate=0.5, false_mark_rate=0.0, median_timing=2.0, median_give_up=1.0
+    )
+    scored = Score(
+        *(getattr(whole, f) for f in ("turning_points", "marks", "hits", "false_marks")),
+        hit_rate=whole.hit_rate,
+        false_mark_rate=whole.false_mark_rate,
+        median_timing=whole.median_timing,
+        median_give_up=whole.median_give_up,
+        eras=(EraScore(ERAS[0], era),),
+    )
+
+    lines = describe_score(scored)
+
+    assert lines[:6] == describe_score(whole)
+    assert lines[6] == (
+        "2016-2018",
+        "2 turning points, 1 marks, 1 hits (hit rate 50.0%), 0 false marks (false-mark rate 0.0%), "
+        "median timing +2.0 candles (late), median give-up 1.00%",
+    )
+
+
+def test_a_score_without_eras_has_none() -> None:
+    assert score(Outcome([], [], [])).eras == ()

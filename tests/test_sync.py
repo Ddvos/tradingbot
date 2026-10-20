@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe
 from tradingbot.store import CandleStore
-from tradingbot.sync import catch_up, import_archive
+from tradingbot.sync import DROPPED_HOURS, catch_up, import_archive
 
 H = 3600
 T0 = 1_704_067_200  # 2024-01-01T00:00:00Z
@@ -126,3 +126,59 @@ def test_catch_up_reports_no_unreachable_hours_when_the_store_is_contiguous() ->
     result = catch_up(store, source, now=T0 + 6 * H)
 
     assert result.unreachable is None
+
+
+Q = 900
+
+DROPPED_HOUR = 1_384_056_000  # 2013-11-10T04:00:00Z, one of the three impossible prints
+
+
+def test_the_three_dropped_prints_are_skipped_at_import(tmp_path: Path) -> None:
+    csv = tmp_path / "XBTUSD_60.csv"
+    csv.write_text(
+        f"{DROPPED_HOUR - H},289.0,296.0,289.0,296.0,9.0,2\n"
+        f"{DROPPED_HOUR},289.18978,4000.0,289.18978,4000.0,9.04493,3\n"
+        f"{DROPPED_HOUR + H},296.0,297.0,290.0,291.0,4.0,4\n"
+    )
+    store = CandleStore(":memory:")
+
+    result = import_archive(csv, store)
+
+    assert result.stored == 2
+    assert [c.time for c in store.read()] == [DROPPED_HOUR - H, DROPPED_HOUR + H]
+    assert DROPPED_HOURS == frozenset({1_383_807_600, 1_384_056_000, 1_384_236_000})
+
+
+def test_fifteen_minute_candles_inside_a_dropped_hour_are_skipped_too(tmp_path: Path) -> None:
+    csv = tmp_path / "XBTUSD_15.csv"
+    csv.write_text(
+        f"{DROPPED_HOUR - Q},289.0,296.0,289.0,296.0,9.0,2\n"
+        f"{DROPPED_HOUR},289.18978,296.87259,289.18978,296.87259,9.03493,2\n"
+        f"{DROPPED_HOUR + 3 * Q},4000.0,4000.0,4000.0,4000.0,0.01,1\n"
+        f"{DROPPED_HOUR + 4 * Q},296.0,297.0,290.0,291.0,4.0,4\n"
+    )
+    store = CandleStore(":memory:", Timeframe.M15)
+
+    result = import_archive(csv, store)
+
+    assert result.stored == 2
+    assert [c.time for c in store.read()] == [DROPPED_HOUR - Q, DROPPED_HOUR + 4 * Q]
+
+
+def test_catch_up_on_fifteen_minute_candles_asks_from_the_next_quarter_on() -> None:
+    store = CandleStore(":memory:", Timeframe.M15)
+    store.upsert([Candle(T0, 100.0, 110.0, 95.0, 105.0, 1.0, 10)])
+    asked: list[int | None] = []
+
+    def source(since: int | None) -> list[Candle]:
+        asked.append(since)
+        return [
+            Candle(T0 + Q, 105.0, 120.0, 100.0, 115.0, 2.0, 20),
+            Candle(T0 + 2 * Q, 115.0, 118.0, 90.0, 92.0, 3.0, 30),  # still forming
+        ]
+
+    result = catch_up(store, source, now=T0 + 2 * Q + 60)
+
+    assert asked == [T0 + Q]
+    assert result.stored == 1
+    assert store.time_range() == (T0, T0 + Q)

@@ -1,6 +1,6 @@
 """The out-of-sample boundary: development code never reads candles past it."""
 
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY, read_development
 from tradingbot.store import CandleStore
 
@@ -49,3 +49,17 @@ def test_a_window_before_the_boundary_is_honoured() -> None:
     )
 
     assert [c.time for c in candles] == [OUT_OF_SAMPLE_BOUNDARY - 2 * H]
+
+
+def test_the_clamp_holds_for_fifteen_minute_candles_too() -> None:
+    quarter = 900
+    store = CandleStore(":memory:", Timeframe.M15)
+    store.upsert(flat(OUT_OF_SAMPLE_BOUNDARY + offset * quarter) for offset in range(-3, 3))
+
+    candles = read_development(store, end=OUT_OF_SAMPLE_BOUNDARY + 10 * quarter)
+
+    assert [c.time for c in candles] == [
+        OUT_OF_SAMPLE_BOUNDARY - 3 * quarter,
+        OUT_OF_SAMPLE_BOUNDARY - 2 * quarter,
+        OUT_OF_SAMPLE_BOUNDARY - quarter,
+    ]

@@ -27,8 +27,9 @@
 	let candles = $state.raw<Candle[]>([]);
 	let turningPoints = $state.raw<TurningPoint[]>([]);
 
-	// Replay: the same hourly candles handed to the detector one at a time. `cursor` is how
-	// many candles have been shown; it only ever grows, except on a restart to zero.
+	// Replay: the candles of the detector's timeframe handed to it one at a time, over the
+	// scoring period. `cursor` is how many candles have been shown; it only ever grows,
+	// except on a restart to zero.
 	let replay = $state.raw<Replay | null>(null);
 	let cursor = $state(0);
 	let playing = $state(false);
@@ -226,19 +227,19 @@
 				<span class="error">{error}</span>
 			{:else if mode === 'hindsight'}
 				{#if candles.length === 0}
-					No candles in the development period (before 2024-10-19). Import an archive that
-					covers it.
+					No {timeframe} candles in the development period (before 2024-10-19). Import an
+					archive that covers it.
 				{:else}
-					{candles.length.toLocaleString()} candles from {utc(candles[0].time)} to {utc(
+					{candles.length.toLocaleString()} {timeframe} candles from {utc(candles[0].time)} to {utc(
 						candles[candles.length - 1].time
 					)}, {turningPoints.length} turning points
 				{/if}
 			{:else if replay}
 				{#if total === 0}
-					No candles in the development period (before 2024-10-19). Import an archive that
-					covers it.
+					No {replay.timeframe} candles in the scoring period (2016-01-01 to 2024-10-19). Import
+					an archive that covers it.
 				{:else}
-					Candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
+					{replay.timeframe} candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
 						? `, ${utc(now)}`
 						: ''}: {shownPoints.length} turning points confirmed, {shownLevels.length} levels active,
 					{shownMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending
@@ -247,9 +248,17 @@
 		</p>
 	</header>
 	{#if mode === 'replay' && replay && total > 0}
-		<p class="score">
-			<strong>{replay.detector}</strong> over the development period: {describe(replay.score)}
-		</p>
+		<div class="score">
+			<p>
+				<strong>{replay.detector}</strong> on {replay.timeframe} candles over the scoring period:
+				{describe(replay.score)}
+			</p>
+			<ul class="eras">
+				{#each replay.score.eras as era (era.era.name)}
+					<li><strong>{era.era.name}</strong>: {describe(era.score)}</li>
+				{/each}
+			</ul>
+		</div>
 	{/if}
 	{#if mode === 'hindsight'}
 		<CandleChart {candles} {turningPoints} />
@@ -346,6 +355,13 @@
 	}
 	.score {
 		margin-bottom: 12px;
+	}
+	.score p {
+		margin: 0;
+	}
+	.eras {
+		margin: 4px 0 0;
+		padding-left: 20px;
 	}
 	.legend {
 		margin-top: 8px;

@@ -1,23 +1,25 @@
 """The `tradingbot` command: import the archive, catch up, serve the API, replay a detector,
-run the one out-of-sample check."""
+re-score a recorded run, check the hourly candles built from the fifteen-minute ones, run
+the one out-of-sample check."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 from tradingbot import out_of_sample
-from tradingbot.candles import iso
+from tradingbot.candles import Candle, Timeframe, iso
 from tradingbot.detectors import DETECTORS, Detector
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY, read_development
-from tradingbot.kraken import KrakenSpot
-from tradingbot.replay import ReplayResult, run
-from tradingbot.scoring import describe_score
-from tradingbot.store import CandleStore
+from tradingbot.hourly_check import check_hourly
+from tradingbot.kraken import REST_REACH, KrakenSpot
+from tradingbot.replay import ReplayResult, collect, run, score_replayed
+from tradingbot.scoring import SCORING_START, describe_score
+from tradingbot.store import STORED_TIMEFRAMES, CandleStore
 from tradingbot.sync import catch_up, import_archive
 
 DEFAULT_DB = "data/candles.sqlite"
@@ -25,29 +27,34 @@ DEFAULT_DB = "data/candles.sqlite"
 
 def describe(store: CandleStore) -> str:
     time_range = store.time_range()
+    label = store.timeframe.label
     if time_range is None:
-        return "The store is empty."
+        return f"The store holds no {label} candles."
     first, last = time_range
-    return f"The store holds {store.count()} hours from {iso(first)} to {iso(last)}."
+    return f"The store holds {store.count()} {label} candles from {iso(first)} to {iso(last)}."
 
 
-def run_import(db: Path, files: list[Path]) -> None:
-    with CandleStore(db) as store:
+def run_import(db: Path, timeframe: Timeframe, files: list[Path]) -> None:
+    with CandleStore(db, timeframe) as store:
         for path in files:
             result = import_archive(path, store)
-            print(f"Imported {path.name}: {result.stored} new hours.")
+            print(f"Imported {path.name}: {result.stored} new {timeframe.label} candles.")
         print(describe(store))
 
 
-def run_catch_up(db: Path) -> None:
-    with CandleStore(db) as store:
-        result = catch_up(store, KrakenSpot().hourly_candles, now=int(time.time()))
-        print(f"Caught up from Kraken: {result.stored} new hours.")
+def run_catch_up(db: Path, timeframe: Timeframe) -> None:
+    kraken = KrakenSpot()
+    with CandleStore(db, timeframe) as store:
+        result = catch_up(
+            store, lambda since: kraken.candles(timeframe, since), now=int(time.time())
+        )
+        print(f"Caught up from Kraken: {result.stored} new {timeframe.label} candles.")
         if result.unreachable is not None:
             first, last = result.unreachable
             print(
-                f"Warning: the hours from {iso(first)} to {iso(last)} are missing. The endpoint "
-                "reaches back only 720 hours; import a quarterly archive that covers them."
+                f"Warning: the {timeframe.label} candles from {iso(first)} to {iso(last)} are "
+                f"missing. The endpoint reaches back only {REST_REACH} candles; import an "
+                "archive that covers them."
             )
         print(describe(store))
 
@@ -71,11 +78,23 @@ def report(result: ReplayResult, period: str) -> str:
     return "\n".join([heading, *lines])
 
 
-def detector_named(name: str) -> Callable[[], Detector]:
+def detector_named(name: str) -> Detector:
     build = DETECTORS.get(name)
     if build is None:
         sys.exit(f"Unknown detector {name!r}. Known detectors: {', '.join(DETECTORS)}.")
-    return build
+    return build()
+
+
+def read_development_candles(db: Path, detector: Detector) -> list[Candle]:
+    """The development candles of the detector's timeframe, or exit when there are none."""
+    with CandleStore(db, detector.timeframe) as store:
+        candles = read_development(store)
+    if not candles:
+        sys.exit(
+            f"The store holds no {detector.timeframe.label} candles in the development period, "
+            f"which ends before {iso(OUT_OF_SAMPLE_BOUNDARY)}. Import an archive that covers it."
+        )
+    return candles
 
 
 def write_chart_data(result: ReplayResult, out: Path) -> None:
@@ -86,31 +105,106 @@ def write_chart_data(result: ReplayResult, out: Path) -> None:
     print(f"Wrote the chart data to {out}.")
 
 
-def run_replay(db: Path, detector: str, out: Path | None) -> None:
-    build = detector_named(detector)
-    with CandleStore(db) as store:
-        candles = read_development(store)
-    if not candles:
+def run_replay(db: Path, name: str, out: Path | None) -> None:
+    detector = detector_named(name)
+    out = out or db.parent / f"replay-{name}.json"
+    if out.exists():
         sys.exit(
-            "The store holds no candles in the development period, which ends before "
-            f"{iso(OUT_OF_SAMPLE_BOUNDARY)}. Import an archive that covers it."
+            f"{out} exists and holds a recorded run, which is never replaced (ADR-0004). "
+            "Pass --out to write the chart data elsewhere."
         )
-    result = run(candles, build())
-    print(report(result, "over the development period"))
-    write_chart_data(result, out or db.parent / f"replay-{detector}.json")
+    candles = read_development_candles(db, detector)
+    result = run(candles, detector, score_from=SCORING_START)
+    if not result.candles:
+        sys.exit(
+            f"No candle falls in the scoring period, which starts at {iso(SCORING_START)}; "
+            "the development candles end before it."
+        )
+    print(report(result, "over the scoring period"))
+    write_chart_data(result, out)
 
 
-def run_out_of_sample(db: Path, detector: str, out: Path | None) -> None:
-    build = detector_named(detector)
+def run_re_score(db: Path, name: str, recorded: Path | None) -> None:
+    """Score a recorded run under the current definitions (ADR-0004).
+
+    The recorded run's own candles are replayed through the detector, so the
+    marks are what they were when the run was recorded, whatever the store holds
+    now, and the command refuses to report unless they are identical in number
+    and time to the recorded marks.
+    """
+    detector = detector_named(name)
+    recorded = recorded or db.parent / f"replay-{name}.json"
+    data = json.loads(recorded.read_text())
+    if data["detector"] != name:
+        sys.exit(f"{recorded} records a run of {data['detector']!r}, not of {name!r}.")
+    candles = [Candle(**row) for row in data["candles"]]
+    recorded_marks = [(m["kind"], m["time"]) for m in data["marks"]]
+    replayed = collect(candles, detector)
+    fresh = [(m.kind.value, m.time) for m in replayed.marks]
+    if fresh != recorded_marks:
+        first = next(
+            (t for (_, t), r in zip(fresh, recorded_marks, strict=False) if (_, t) != r),
+            None,
+        )
+        if first is None:
+            first = (fresh + recorded_marks)[min(len(fresh), len(recorded_marks))][1]
+        sys.exit(
+            f"The fresh replay of {name} placed {len(fresh)} marks where {recorded} records "
+            f"{len(recorded_marks)}; the first difference is at {iso(first)}. The run is not "
+            "the recorded one, so nothing is reported."
+        )
+    result = score_replayed(replayed, score_from=SCORING_START)
+    print(
+        f"Re-scored {name} under ADR-0005: {len(fresh)} marks, identical in number and time "
+        f"to the recorded run in {recorded}."
+    )
+    print(report(result, "over the scoring period"))
+
+
+def run_check_hourly(db: Path) -> None:
+    with CandleStore(db, Timeframe.M15) as fifteen, CandleStore(db) as hourly:
+        quarters = read_development(fifteen)
+        stored = read_development(hourly)
+    for candles, label in ((quarters, Timeframe.M15.label), (stored, Timeframe.H1.label)):
+        if not candles:
+            sys.exit(
+                f"The store holds no {label} candles in the development period. Import the "
+                "archive that holds them."
+            )
+    result = check_hourly(quarters, stored, SCORING_START)
+    counted = [
+        ("only in the 15-minute build", result.only_built),
+        ("only in the hourly table", result.only_stored),
+        ("differing hours", result.differing),
+    ]
+    print(
+        f"Built {result.built} hourly candles from {result.quarters} 15-minute candles over the "
+        f"scoring period, {iso(result.first)} to {iso(result.last)}; the hourly table holds "
+        f"{result.stored}."
+    )
+    for label, times in counted:
+        first = f"  (first {iso(times[0])})" if times else ""
+        print(f"  {label:<29} {len(times)}{first}")
+    first_point = (
+        f"  (first {iso(result.differing_points[0].time)})" if result.differing_points else ""
+    )
+    print(
+        f"  {'turning points':<29} {result.points_built} built, {result.points_stored} stored, "
+        f"{len(result.differing_points)} differing{first_point}"
+    )
+
+
+def run_out_of_sample(db: Path, name: str, out: Path | None) -> None:
+    detector = detector_named(name)
     log = Path(out_of_sample.DEFAULT_LOG)
     try:
-        with CandleStore(db) as store:
-            result = out_of_sample.check(store, build(), log, now=int(time.time()))
+        with CandleStore(db, detector.timeframe) as store:
+            result = out_of_sample.check(store, detector, log, now=int(time.time()))
     except out_of_sample.Refused as refused:
         sys.exit(str(refused))
     print(report(result, "out of sample"))
     print(f"Logged this run in {log}.")
-    write_chart_data(result, out or db.parent / f"out-of-sample-{detector}.json")
+    write_chart_data(result, out or db.parent / f"out-of-sample-{name}.json")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -119,20 +213,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--db",
         type=Path,
         default=Path(os.environ.get("TRADINGBOT_DB", DEFAULT_DB)),
-        help=f"SQLite file holding the hourly candles (default: $TRADINGBOT_DB or {DEFAULT_DB})",
+        help=f"SQLite file holding the candles (default: $TRADINGBOT_DB or {DEFAULT_DB})",
+    )
+    stored = argparse.ArgumentParser(add_help=False)
+    stored.add_argument(
+        "--timeframe",
+        type=Timeframe,
+        choices=STORED_TIMEFRAMES,
+        default=Timeframe.H1,
+        metavar="|".join(t.value for t in STORED_TIMEFRAMES),
+        help="the candles to store: 15m or 1h (default: 1h)",
     )
     parser = argparse.ArgumentParser(
-        prog="tradingbot", description="Hourly Kraken spot XBTUSD candles in SQLite."
+        prog="tradingbot", description="Kraken spot XBTUSD candles in SQLite."
     )
     commands = parser.add_subparsers(dest="command", required=True)
     importer = commands.add_parser(
-        "import", parents=[common], help="load hourly candles from Kraken OHLCVT archive files"
+        "import",
+        parents=[common, stored],
+        help="load candles from Kraken OHLCVT archive files",
     )
-    importer.add_argument("csv", nargs="+", type=Path, help="archive file(s), e.g. XBTUSD_60.csv")
+    importer.add_argument(
+        "csv", nargs="+", type=Path, help="archive file(s), e.g. XBTUSD_60.csv or XBTUSD_15.csv"
+    )
     commands.add_parser(
         "catch-up",
-        parents=[common],
-        help="append the newest completed hourly candles from the Kraken REST endpoint",
+        parents=[common, stored],
+        help="append the newest completed candles from the Kraken REST endpoint",
     )
     server = commands.add_parser("serve", parents=[common], help="start the HTTP API")
     server.add_argument("--host", default="127.0.0.1")
@@ -140,7 +247,10 @@ def build_parser() -> argparse.ArgumentParser:
     replayer = commands.add_parser(
         "replay",
         parents=[common],
-        help="replay the development period through a detector, print its score, write chart data",
+        help=(
+            "replay the development period through a detector, print its score over the "
+            "scoring period, write chart data"
+        ),
     )
     replayer.add_argument("detector", help=f"detector name: {', '.join(DETECTORS)}")
     replayer.add_argument(
@@ -148,6 +258,29 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="JSON file for the chart data (default: replay-<detector>.json next to the store)",
+    )
+    rescorer = commands.add_parser(
+        "re-score",
+        parents=[common],
+        help=(
+            "replay a recorded run's own candles again and print its score under the current "
+            "definitions; refuses unless the marks are identical to the recorded ones"
+        ),
+    )
+    rescorer.add_argument("detector", help=f"detector name: {', '.join(DETECTORS)}")
+    rescorer.add_argument(
+        "--recorded",
+        type=Path,
+        default=None,
+        help="the recorded run's chart data (default: replay-<detector>.json next to the store)",
+    )
+    commands.add_parser(
+        "check-hourly",
+        parents=[common],
+        help=(
+            "build hourly candles from the stored 15-minute ones as a replay does and compare "
+            "them with the stored hourly table over the scoring period"
+        ),
     )
     checker = commands.add_parser(
         "out-of-sample",
@@ -174,12 +307,16 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     match args.command:
         case "import":
-            run_import(args.db, args.csv)
+            run_import(args.db, args.timeframe, args.csv)
         case "catch-up":
-            run_catch_up(args.db)
+            run_catch_up(args.db, args.timeframe)
         case "serve":
             run_serve(args.db, args.host, args.port)
         case "replay":
             run_replay(args.db, args.detector, args.out)
+        case "re-score":
+            run_re_score(args.db, args.detector, args.recorded)
+        case "check-hourly":
+            run_check_hourly(args.db)
         case "out-of-sample":
             run_out_of_sample(args.db, args.detector, args.out)

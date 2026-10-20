@@ -2,8 +2,20 @@
 
 At every step the detector is handed the candles so far and the turning points
 confirmed so far, and nothing later, so no future candle can leak into a mark.
-The dashboard replay and the batch command both go through `run`, so they
-place the same marks and read the same score.
+The turning points are always found on hourly candles. An hourly detector's
+candles are those hourly candles themselves. A fifteen-minute detector reads
+fifteen-minute candles, and the hourly candles are built from that stream as
+hours complete: with the candle that ends on the hour, with the first candle
+of a later hour when the hour's last quarter had no trades, or with the last
+candle of the series. The completed hour goes to the turning-point finder
+before the detector sees the candle, so a turning point confirmed by the hour
+a candle completes is visible to the detector on that candle (ADR-0006).
+
+`collect` replays a whole series and keeps everything the replay produced;
+`score_replayed` scores that under the tolerance, the scoring period and the
+eras. `run` is both in one. The dashboard replay, the batch command and the
+re-scoring all go through them, so they place the same marks and read the
+same score.
 """
 
 from __future__ import annotations
@@ -12,10 +24,47 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe, merge, period_start
 from tradingbot.detectors import Detector, Level, Mark
-from tradingbot.scoring import TOLERANCE, Score, Tolerance, match_marks, score
+from tradingbot.scoring import ERAS, TOLERANCE, Era, Score, Tolerance, match_marks, score
 from tradingbot.turning_points import Kind, TurningPoint, TurningPointFinder
+
+HOUR = Timeframe.H1.seconds
+
+
+class HourBuilder:
+    """Builds hourly candles from the candles of a shorter (or the hourly) timeframe.
+
+    `push` answers the hourly candles the pushed candle completes: none, the
+    hour the candle ends, the previous hour when this candle is the first of a
+    later hour, or both. The last candle of a series completes its hour too.
+    Pushed hourly candles complete themselves, one per push.
+    """
+
+    def __init__(self, timeframe: Timeframe) -> None:
+        self._size = timeframe.seconds
+        self._current: Candle | None = None
+
+    def push(self, candle: Candle, *, last: bool = False) -> list[Candle]:
+        start = period_start(candle.time, Timeframe.H1)
+        completed: list[Candle] = []
+        if self._current is not None and self._current.time != start:
+            completed.append(self._current)
+            self._current = None
+        self._current = merge(self._current, candle, start)
+        if last or candle.time + self._size == start + HOUR:
+            completed.append(self._current)
+            self._current = None
+        return completed
+
+
+def build_hourly(candles: Sequence[Candle], timeframe: Timeframe) -> list[Candle]:
+    """The hourly candles a replay of `candles` (of `timeframe`) builds, oldest first."""
+    hours = HourBuilder(timeframe)
+    built: list[Candle] = []
+    for i, candle in enumerate(candles):
+        built.extend(hours.push(candle, last=i == len(candles) - 1))
+    return built
 
 
 @dataclass(frozen=True)
@@ -24,29 +73,94 @@ class Step:
     mark: Mark | None
     """The mark the detector placed on this candle, if any."""
     confirmed: tuple[TurningPoint, ...]
-    """The turning points this candle confirmed: new levels from now on."""
-    pending_from: int
-    """Start time of the earliest candle that can still become a turning point."""
+    """The turning points confirmed by the hours this candle completed: new levels from now on."""
+    pending_from: int | None
+    """Start time of the earliest hourly candle that can still become a turning point;
+    None until the first hour has completed."""
+    completed: tuple[Candle, ...]
+    """The hourly candles this candle completed: itself for an hourly detector."""
 
 
 def replay(candles: Iterable[Candle], detector: Detector) -> Iterator[Step]:
-    """One step per candle, oldest first. Candles must be in time order."""
+    """One step per candle of the detector's timeframe, oldest first.
+
+    Candles must be in time order and start on a period of that timeframe.
+    """
     seen: list[Candle] = []
     levels: list[TurningPoint] = []
     finder = TurningPointFinder()
-    for candle in candles:
+    hours = HourBuilder(detector.timeframe)
+    size = detector.timeframe.seconds
+    iterator = iter(candles)
+    following = next(iterator, None)
+    while following is not None:
+        candle, following = following, next(iterator, None)
         if seen and candle.time <= seen[-1].time:
             raise ValueError(
                 f"candles must be in time order; {candle.time} follows {seen[-1].time}"
             )
+        if candle.time % size:
+            raise ValueError(f"{candle.time} does not start a {detector.timeframe.value} candle")
         seen.append(candle)
-        confirmed = finder.push(candle)
+        completed = hours.push(candle, last=following is None)
+        confirmed = [point for hour in completed for point in finder.push(hour)]
         levels.extend(confirmed)
         kind = detector.mark(seen, levels)
         mark = Mark(kind, candle.time, candle.close) if kind is not None else None
-        pending_from = finder.pending_from
-        assert pending_from is not None  # the finder has seen this candle
-        yield Step(candle, mark, tuple(confirmed), pending_from)
+        yield Step(candle, mark, tuple(confirmed), finder.pending_from, tuple(completed))
+
+
+@dataclass(frozen=True)
+class Replayed:
+    """Everything a replay produced, before scoring."""
+
+    detector: str
+    timeframe: Timeframe
+    candles: list[Candle]
+    """The candles the detector read, oldest first."""
+    hourly: list[Candle]
+    """The hourly candles the turning-point finder read: `candles` for an hourly detector."""
+    completed_at: list[int]
+    """Per hourly candle, the start time of the candle (of the detector's timeframe) that
+    completed it; the hourly candle's own time for an hourly detector."""
+    pending_index: list[int]
+    """Per hourly candle, the index in `hourly` of the earliest hourly candle that could
+    still become a turning point once it had completed. It never moves backwards."""
+    turning_points: list[TurningPoint]
+    levels: list[Level]
+    marks: list[Mark]
+
+
+def collect(candles: Sequence[Candle], detector: Detector) -> Replayed:
+    """Replay the whole series through the detector and keep what it produced."""
+    hourly: list[Candle] = []
+    completed_at: list[int] = []
+    pending_index: list[int] = []
+    index: dict[int, int] = {}
+    marks: list[Mark] = []
+    points: list[TurningPoint] = []
+    for step in replay(candles, detector):
+        if step.mark is not None:
+            marks.append(step.mark)
+        points.extend(step.confirmed)
+        for hour in step.completed:
+            index[hour.time] = len(hourly)
+            hourly.append(hour)
+            completed_at.append(step.candle.time)
+        if step.completed:
+            assert step.pending_from is not None  # the finder has seen an hour
+            pending_index.extend([index[step.pending_from]] * len(step.completed))
+    return Replayed(
+        detector.name,
+        detector.timeframe,
+        list(candles),
+        hourly,
+        completed_at,
+        pending_index,
+        points,
+        detector.levels(points),
+        marks,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +180,9 @@ class MarkOutcome:
 @dataclass(frozen=True)
 class ReplayResult:
     detector: str
+    timeframe: Timeframe
     candles: list[Candle]
+    """The candles the detector read, over the scored period."""
     turning_points: list[TurningPoint]
     levels: list[Level]
     """The levels the detector read, with the candles that saw them; what the chart draws."""
@@ -75,15 +191,15 @@ class ReplayResult:
 
 
 def settled_index(mark_index: int, pending_index: Sequence[int], tolerance: Tolerance) -> int:
-    """The step from which a mark's outcome is certain.
+    """The hourly candle from which a mark's outcome is certain.
 
     Two things can still change it before then: a mark placed later that is
     nearer to a turning point inside this mark's tolerance (possible until two
     tolerances after the mark), and a turning point still to be confirmed
     inside the tolerance (possible until the earliest candle that can still
-    become a turning point lies beyond it). `pending_index` holds, per step,
-    the index of that candle; it never moves backwards. If the series ends
-    first, the outcome is settled by its last step.
+    become a turning point lies beyond it). `pending_index` holds, per hourly
+    candle, the index of that candle; it never moves backwards. If the series
+    ends first, the outcome is settled by its last hour.
     """
     last = len(pending_index) - 1
     tolerance_end = mark_index + tolerance.candles
@@ -92,46 +208,46 @@ def settled_index(mark_index: int, pending_index: Sequence[int], tolerance: Tole
     return min(max(competitors_placed, tolerance_settled), last)
 
 
-def run(
-    candles: Sequence[Candle],
-    detector: Detector,
+def score_replayed(
+    replayed: Replayed,
     tolerance: Tolerance = TOLERANCE,
     score_from: int | None = None,
+    eras: Sequence[Era] = ERAS,
 ) -> ReplayResult:
-    """Replay the whole series through the detector and score its marks.
+    """Score a replay's marks against its turning points.
 
-    With `score_from`, the detector and the turning-point finder still see
-    every candle, so the levels carry over, but only the candles, marks and
-    turning points from that time on are kept, and they are scored among
-    themselves as a series of their own; of the levels, those still seen by a
-    kept candle. The out-of-sample check uses this.
+    With `score_from`, a whole hour, only the candles, marks and turning points
+    from that time on are kept, and they are scored among themselves as a
+    series of their own; of the levels, those still seen by a kept candle. The
+    detector saw everything before it, so its state carried over. The scoring
+    period and the out-of-sample check both use this.
     """
-    index = {candle.time: i for i, candle in enumerate(candles)}
-    marks: list[Mark] = []
-    points: list[TurningPoint] = []
-    pending_index: list[int] = []
-    for step in replay(candles, detector):
-        if step.mark is not None:
-            marks.append(step.mark)
-        points.extend(step.confirmed)
-        pending_index.append(index[step.pending_from])
-    levels = detector.levels(points)
+    candles = replayed.candles
+    hourly = replayed.hourly
+    completed_at = replayed.completed_at
+    pending_index = replayed.pending_index
+    marks, points, levels = replayed.marks, replayed.turning_points, replayed.levels
     if score_from is not None:
-        first = bisect_left(candles, score_from, key=lambda c: c.time)
-        candles = candles[first:]
-        index = {candle.time: i for i, candle in enumerate(candles)}
+        if score_from % HOUR:
+            raise ValueError(f"score_from must start an hour; {score_from} does not")
+        first = bisect_left(hourly, score_from, key=lambda c: c.time)
+        hourly = hourly[first:]
+        completed_at = completed_at[first:]
+        candles = candles[bisect_left(candles, score_from, key=lambda c: c.time) :]
         marks = [m for m in marks if m.time >= score_from]
         points = [p for p in points if p.time >= score_from]
         levels = [lv for lv in levels if lv.active_until is None or lv.active_until >= score_from]
         # A candle before `score_from` that can still become a turning point
         # counts as the first kept candle: nothing earlier exists in this series.
         pending_index = [max(i - first, 0) for i in pending_index[first:]]
-    outcome = match_marks(candles, marks, points, tolerance)
+    hour_index = {candle.time: i for i, candle in enumerate(hourly)}
+    outcome = match_marks(hourly, marks, points, tolerance)
     hits = {hit.mark.time: hit for hit in outcome.hits}
     outcomes: list[MarkOutcome] = []
     for mark in marks:
         hit = hits.get(mark.time)
-        settled = settled_index(index[mark.time], pending_index, tolerance)
+        mark_hour = hour_index[period_start(mark.time, Timeframe.H1)]
+        settled = settled_index(mark_hour, pending_index, tolerance)
         outcomes.append(
             MarkOutcome(
                 mark.kind,
@@ -141,7 +257,26 @@ def run(
                 turning_point=hit.turning_point.time if hit else None,
                 timing=hit.timing if hit else None,
                 give_up=hit.give_up if hit else None,
-                settled_at=candles[settled].time,
+                settled_at=completed_at[settled],
             )
         )
-    return ReplayResult(detector.name, list(candles), points, levels, outcomes, score(outcome))
+    return ReplayResult(
+        replayed.detector,
+        replayed.timeframe,
+        list(candles),
+        points,
+        levels,
+        outcomes,
+        score(outcome, eras),
+    )
+
+
+def run(
+    candles: Sequence[Candle],
+    detector: Detector,
+    tolerance: Tolerance = TOLERANCE,
+    score_from: int | None = None,
+    eras: Sequence[Era] = ERAS,
+) -> ReplayResult:
+    """Replay the whole series through the detector and score its marks; see `score_replayed`."""
+    return score_replayed(collect(candles, detector), tolerance, score_from, eras)

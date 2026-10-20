@@ -1,4 +1,5 @@
-"""GET /candles: hourly candles and their 4-hour and daily resamples as JSON."""
+"""GET /candles: fifteen-minute and hourly candles and the 4-hour and daily resamples as JSON;
+GET /turning-points and GET /replay: the harness over the development period."""
 
 from pathlib import Path
 
@@ -6,10 +7,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tradingbot.api import create_app
-from tradingbot.candles import Candle
+from tradingbot.candles import Candle, Timeframe
 from tradingbot.store import CandleStore
 
 H = 3600
+Q = 900
 DAY_START = 1_704_067_200  # 2024-01-01T00:00:00Z
 
 
@@ -107,7 +109,7 @@ def test_a_time_range_inside_a_period_still_yields_the_whole_period(client: Test
 
 
 def test_an_unknown_timeframe_is_rejected(client: TestClient) -> None:
-    response = client.get("/candles", params={"timeframe": "15m"})
+    response = client.get("/candles", params={"timeframe": "5m"})
 
     assert response.status_code == 422
 
@@ -222,7 +224,18 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
         "give_up": None,
         "settled_at": DAY_START + 15 * H,
     }
-    assert body["score"] == {
+    empty = {
+        "turning_points": 0,
+        "marks": 0,
+        "hits": 0,
+        "false_marks": 0,
+        "hit_rate": 0.0,
+        "false_mark_rate": 0.0,
+        "median_timing": None,
+        "median_give_up": None,
+        "eras": [],
+    }
+    whole = {
         "turning_points": 3,
         "marks": 4,
         "hits": 0,
@@ -232,7 +245,19 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
         "median_timing": None,
         "median_give_up": None,
     }
+    assert body["score"] == {
+        **whole,
+        "eras": [
+            {"era": {"name": "2016-2018", "start": 1451606400, "end": 1546300800}, "score": empty},
+            {"era": {"name": "2019-2021", "start": 1546300800, "end": 1640995200}, "score": empty},
+            {
+                "era": {"name": "2022-2024", "start": 1640995200, "end": 1735689600},
+                "score": {**whole, "eras": []},
+            },
+        ],
+    }
     assert body["levels"] == []  # the floor reads no levels
+    assert body["timeframe"] == "1h"
 
 
 def test_a_replay_answers_the_levels_the_detector_read_with_their_spans(
@@ -305,3 +330,60 @@ def test_no_route_reads_candles_past_the_boundary(
     assert body.get("marks", []) == []
     if path == "/candles" and params["timeframe"] == "1h":
         assert len(body["candles"]) == 3
+
+
+def quarters_of_hour_three() -> list[Candle]:
+    """The fifteen-minute candles of 03:00, whose hourly low of 90 falls at 03:30."""
+    rows = [
+        (0, 93.0, 92.0, 92.5),
+        (1, 92.5, 91.0, 91.5),
+        (2, 91.5, 90.0, 90.5),
+        (3, 90.8, 90.5, 91.0),
+    ]
+    return [Candle(DAY_START + 3 * H + q * Q, hi, hi, lo, c, 1.0, 1) for q, hi, lo, c in rows]
+
+
+@pytest.fixture
+def two_table_client(tmp_path: Path) -> TestClient:
+    db = tmp_path / "candles.sqlite"
+    with CandleStore(db) as hourly, CandleStore(db, Timeframe.M15) as fifteen:
+        hourly.upsert(sixteen_hours())
+        fifteen.upsert(quarters_of_hour_three())
+    return TestClient(create_app(db))
+
+
+def test_fifteen_minute_candles_come_from_their_own_table(two_table_client: TestClient) -> None:
+    body = two_table_client.get("/candles", params={"timeframe": "15m"}).json()
+
+    assert body["timeframe"] == "15m"
+    assert [c["time"] for c in body["candles"]] == [DAY_START + 3 * H + q * Q for q in range(4)]
+    assert body["candles"][2]["low"] == 90.0
+
+
+def test_a_fifteen_minute_window_is_widened_to_whole_quarters(two_table_client: TestClient) -> None:
+    body = two_table_client.get(
+        "/candles",
+        params={
+            "timeframe": "15m",
+            "from": DAY_START + 3 * H + Q + 60,
+            "to": DAY_START + 3 * H + Q + 60,
+        },
+    ).json()
+
+    assert [c["time"] for c in body["candles"]] == [DAY_START + 3 * H + Q]
+
+
+def test_on_fifteen_minute_candles_a_turning_point_sits_on_the_candle_holding_the_extreme(
+    two_table_client: TestClient,
+) -> None:
+    body = two_table_client.get("/turning-points", params={"timeframe": "15m"}).json()
+
+    # The bottom at 03:00 has its low of 90 in the 03:30 candle; the hours without
+    # fifteen-minute candles keep the turning point at the start of the hour.
+    assert [
+        (p["kind"], p["time"], p["price"], p["confirmed_at"]) for p in body["turning_points"]
+    ] == [
+        ("bottom", DAY_START + 3 * H + 2 * Q, 90.0, DAY_START + 6 * H),
+        ("top", DAY_START + 8 * H, 100.0, DAY_START + 11 * H),
+        ("bottom", DAY_START + 12 * H, 90.0, DAY_START + 14 * H),
+    ]
