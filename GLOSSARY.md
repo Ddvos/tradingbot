@@ -17,7 +17,7 @@ The open, high, low, close and volume of one timeframe's period.
 _Avoid_: bar, OHLC, kline
 
 **Timeframe**:
-The period one candle covers: one hour, four hours or one day.
+The period one candle covers: fifteen minutes, one hour, four hours or one day.
 _Avoid_: resolution, interval, period
 
 **Position**:
@@ -75,11 +75,11 @@ A mark with no turning point of its kind inside the tolerance.
 _Avoid_: false positive, fake-out
 
 **Tolerance**:
-How far a mark may be from a turning point, in candles and in percent of price, and still count as a hit.
+How far a mark may be from a turning point and still count as a hit: a set number of hourly candles before or after it, and in price no further from the extreme than a set percentage, or than the extreme candle's own close when that is further.
 _Avoid_: window, margin, slack
 
 **Timing**:
-The number of candles a hit is early or late relative to its turning point.
+The number of hourly candles a hit is early or late relative to its turning point.
 _Avoid_: lag, delay, lead
 
 **Give-up**:
@@ -87,7 +87,7 @@ How far, as a percentage, a hit's close is from its turning point's extreme pric
 _Avoid_: slippage, cost of confirmation
 
 **Score**:
-How a detector did over a period: hit rate, false-mark rate, median timing, median give-up and the raw counts.
+How a detector did over the scoring period: hit rate, false-mark rate, median timing, median give-up and the raw counts, for the period as a whole and for each era.
 _Avoid_: accuracy, performance, metrics
 
 **Settled**:
@@ -95,7 +95,7 @@ A mark whose outcome, hit or false mark, no later candle can change. Until then 
 _Avoid_: final, resolved, confirmed
 
 **Floor**:
-The reference detector every candidate must beat: it marks a top on the first candle that closes a fixed distance below the highest high since its last bottom mark, and the mirror image for a bottom. It is never a candidate itself.
+The reference detector of the hourly harness, kept for comparison: it marks a top on the first candle that closes a fixed distance below the highest high since its last bottom mark, and the mirror image for a bottom. It is never a candidate and sets no bar.
 _Avoid_: baseline, benchmark, naive detector
 
 **Level**:
@@ -118,6 +118,14 @@ _Avoid_: LL, down bar, swing low
 Consecutive higher highs, or consecutive lower lows, ending at a given candle. An equal high or low ends the run; a later candle whose high falls short of the previous high, or whose low stays above the previous low, fails it.
 _Avoid_: streak, impulse, leg
 
+**Swing**:
+The move from one turning point to the next. The current swing is the move since the lowest low after the last confirmed top, or since the highest high after the last confirmed bottom; it can end in a turning point only once it has reached the reversal size.
+_Avoid_: wave, move, leg
+
+**Swing extreme**:
+The highest high of the current up-swing, or the lowest low of the current down-swing, so far. If the swing ends there, it is the turning point's extreme.
+_Avoid_: swing high, swing low, running high, running low
+
 **Detector one**:
 The first candidate detector: a mark inside a zone on the candle that fails a run of at least three higher highs (a top) or lower lows (a bottom).
 _Avoid_: the detector, v1, the levels detector
@@ -125,6 +133,10 @@ _Avoid_: the detector, v1, the levels detector
 **Detector two**:
 The second iteration of detector one's family: detector one's rule with levels that expire.
 _Avoid_: v2, the expiring detector, one with expiry
+
+**Detector three**:
+The first iteration of family two: on fifteen-minute candles, once the swing has reached the reversal size, a mark on the first candle that stays short of the swing extreme, one mark per new extreme.
+_Avoid_: v3, the 15-minute detector, the swing detector
 
 **Replay**:
 Feeding stored candles to a detector one at a time in time order, so that at every step nothing later is visible.
@@ -185,6 +197,14 @@ _Avoid_: cutoff, split date, holdout start
 **Development period**:
 The stored history before the out-of-sample boundary: the only candles a detector, a replay or a chart may read while a detector is being designed.
 _Avoid_: training set, in-sample, backtest period
+
+**Scoring period**:
+The part of the development period a score counts. Earlier candles are replayed so a detector carries its state into it, but no candle, mark or turning point before it is scored.
+_Avoid_: scoring window, sample, in-sample
+
+**Era**:
+A fixed block of years within the scoring period. A success criterion must hold in every era, not only over the period as a whole.
+_Avoid_: regime, epoch, period
 
 **Paper trading**:
 Running the bot against live market data with simulated orders and a simulated account.
