@@ -21,7 +21,7 @@ The period one candle covers: fifteen minutes, one hour, four hours or one day.
 _Avoid_: resolution, interval, period
 
 **Position**:
-The bot's current exposure in the perpetual: long, short, or flat.
+The bot's current exposure: in spot long or cash, in the perpetual long, short, or flat.
 _Avoid_: holding, exposure
 
 **Funding**:
@@ -87,8 +87,8 @@ How far, as a percentage, a hit's close is from its turning point's extreme pric
 _Avoid_: slippage, cost of confirmation
 
 **Score**:
-How a detector did over the scoring period: hit rate, false-mark rate, false marks per hit, median timing, median give-up and the raw counts, for the period as a whole and for each era.
-_Avoid_: accuracy, performance, metrics
+How a detector or a strategy did over the scoring period, for the period as a whole and for each era. A detector's: hit rate, false-mark rate, false marks per hit, median timing, median give-up and the raw counts. A strategy's, under each cost model: its growth and worst drawdown next to the benchmark's, its trades, the fees and funding paid, the share of time long, and the result per trade by the outcome of the marks that opened and closed it.
+_Avoid_: accuracy, performance, metrics, P&L
 
 **Settled**:
 A mark whose outcome, hit or false mark, no later candle can change. Until then the mark is pending.
@@ -164,9 +164,21 @@ _Avoid_: simulation, playback, loop, backtest
 A set of explicit, readable rules that turn marks and market data into a desired position.
 _Avoid_: model, algorithm, signal generator
 
+**Flip**:
+The reference strategy, kept for comparison: all in at a bottom mark when flat, all out at a top mark when long, every mark acted on. It is never a candidate and sets no bar.
+_Avoid_: baseline, naive strategy, buy-and-sell-every-mark
+
 **Trade**:
 One round trip: opening a position and closing it again, with the resulting profit or loss.
 _Avoid_: order, fill
+
+**Fill**:
+The price an order gets and the fee it pays. In a backtest: the next candle's open, moved against the bot by the slippage, plus the taker fee.
+_Avoid_: execution, order price, entry price
+
+**Cost model**:
+The fees, slippage and funding a backtest charges for trading one market: spot or the perpetual.
+_Avoid_: fee model, venue, commission schedule
 
 **Stop**:
 The price at which an open position is closed to cap the loss of that trade.
@@ -175,6 +187,14 @@ _Avoid_: stop-loss, SL, halt
 **Account**:
 The money the bot is allowed to trade with, held at the exchange and measured in one currency.
 _Avoid_: wallet, balance, capital, portfolio
+
+**Growth**:
+What a period made of the account: its value at the period's last candle close divided by its value at the close before the period began, Bitcoin counted at the close.
+_Avoid_: return, ROI, performance, profit factor
+
+**Worst drawdown**:
+The largest fall of the account's value from an earlier peak within a period, as a percentage of that peak, measured at candle closes.
+_Avoid_: max drawdown, MDD, peak-to-trough
 
 **Risk per trade**:
 The largest loss a single trade is planned to take if its stop is hit, expressed as a percentage of the account.
@@ -195,7 +215,7 @@ The pass/fail rule a detector or strategy must meet, written down before its rep
 _Avoid_: gate, target, hypothesis
 
 **Family**:
-The detectors that test one hypothesis, each a new iteration of the last. A family gets one out-of-sample check in all, and is dropped when it fails it.
+The detectors, or the strategies, that test one hypothesis, each a new iteration of the last. A family gets one out-of-sample check in all, and is dropped when it fails it.
 _Avoid_: lineage, version line, series
 
 **Iteration**:
@@ -203,7 +223,7 @@ One pre-registered rule of a family, written down with its success criterion bef
 _Avoid_: version, attempt, tweak, v2
 
 **Look**:
-A hindsight measurement on candles, turning points or a recorded run, taken between iterations and written down so it can be rerun. It never runs a candidate detector.
+A hindsight measurement on candles, turning points or a recorded run, taken between iterations and written down so it can be rerun. It never runs a candidate detector, and never runs an account through a period.
 _Avoid_: experiment, analysis, exploration, backtest
 
 **Out-of-sample check**:
@@ -215,7 +235,7 @@ The fixed moment that ends the development period; candles from it on are reserv
 _Avoid_: cutoff, split date, holdout start
 
 **Development period**:
-The stored history before the out-of-sample boundary: the only candles a detector, a replay or a chart may read while a detector is being designed.
+The stored history before the out-of-sample boundary: the only candles a detector, a strategy, a replay, a backtest or a chart may read while a detector or a strategy is being designed.
 _Avoid_: training set, in-sample, backtest period
 
 **Scoring period**:
