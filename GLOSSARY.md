@@ -63,7 +63,7 @@ A detector's claim, made at the close of the latest candle, that this candle is 
 _Avoid_: signal, label, prediction, point, dot
 
 **Hit**:
-A mark with a turning point of the same kind inside the tolerance.
+The one mark a turning point takes: the nearest mark of its kind inside the tolerance.
 _Avoid_: true positive, correct signal
 
 **Miss**:
@@ -71,8 +71,8 @@ A turning point with no hit.
 _Avoid_: false negative, missed signal
 
 **False mark**:
-A mark with no turning point of its kind inside the tolerance.
-_Avoid_: false positive, fake-out
+A mark that is no turning point's hit: no turning point of its kind inside the tolerance, or one that a nearer mark took.
+_Avoid_: false positive, fake-out, duplicate
 
 **Tolerance**:
 How far a mark may be from a turning point and still count as a hit: a set number of hourly candles before or after it, and in price no further from the extreme than a set percentage, or than the extreme candle's own close when that is further.
@@ -87,7 +87,7 @@ How far, as a percentage, a hit's close is from its turning point's extreme pric
 _Avoid_: slippage, cost of confirmation
 
 **Score**:
-How a detector did over the scoring period: hit rate, false-mark rate, median timing, median give-up and the raw counts, for the period as a whole and for each era.
+How a detector did over the scoring period: hit rate, false-mark rate, false marks per hit, median timing, median give-up and the raw counts, for the period as a whole and for each era.
 _Avoid_: accuracy, performance, metrics
 
 **Settled**:
@@ -125,6 +125,10 @@ _Avoid_: wave, move, leg
 **Swing extreme**:
 The highest high of the current up-swing, or the lowest low of the current down-swing, so far. If the swing ends there, it is the turning point's extreme.
 _Avoid_: swing high, swing low, running high, running low
+
+**Pause**:
+A candle that fails to extend a swing that has reached the reversal size: the first candle short of each new swing extreme. Every turning point ends with one; most pauses end no turn.
+_Avoid_: consolidation, stall, pullback, dip, hesitation
 
 **Swing low**:
 Where the current up-swing starts: the lowest fifteen-minute low at or after the start of the hour holding the last confirmed top. Not a bottom, and not the swing extreme. Before any top is confirmed there is none.
@@ -197,6 +201,10 @@ _Avoid_: lineage, version line, series
 **Iteration**:
 One pre-registered rule of a family, written down with its success criterion before its single development run. A fail leads to the next iteration, never to an adjusted rerun.
 _Avoid_: version, attempt, tweak, v2
+
+**Look**:
+A hindsight measurement on candles, turning points or a recorded run, taken between iterations and written down so it can be rerun. It never runs a candidate detector.
+_Avoid_: experiment, analysis, exploration, backtest
 
 **Out-of-sample check**:
 A replay or backtest over a period that was never looked at while designing or tuning the detector or strategy.

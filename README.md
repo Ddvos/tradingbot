@@ -143,7 +143,7 @@ Decided on 20 October 2026 and recorded in ADR-0004, ADR-0005 and ADR-0006 befor
 | Tolerance B | a hit lies within 24 hourly candles of a turning point of its kind, and its close is within 2% of the extreme or no further than the extreme hourly candle's own close (ADR-0005) | `scoring.py` |
 | Scoring period | from `2016-01-01T00:00:00Z` (Unix 1451606400) to the boundary; replays still start at the first stored candle | `scoring.py` |
 | Eras | 2016 to 2018, 2019 to 2021, 2022 to 2024; every score is printed for the period and per era | `scoring.py` |
-| Bars | hit rate at least 80% in every era; false marks at most equal to hits; no give-up bar | issue #20 |
+| Bars | hit rate at least 80% in every era; false marks per hit reported, with no bar since ADR-0007 (slice 6 was judged under the earlier bar of at most one per hit); no give-up bar | issue #20, ADR-0007 |
 | Dropped prints | the hourly candles at Unix 1383807600, 1384056000 and 1384236000 (2013-11-07 07:00, 2013-11-10 04:00, 2013-11-12 06:00 UTC) and every 15-minute candle inside those hours; skipped at import, deleted once from the existing store | `sync.py` |
 | A 15-minute mark | placed at the 15-minute close; scored by the hour it falls in; timing in hourly candles; give-up from the 15-minute close; at most one mark per 15-minute candle | `scoring.py`, `replay.py` |
 | Hourly candles in a 15-minute replay | built from the 15-minute stream when the hour completes (the candle ending at the hour, the first candle of a later hour, or the last candle of the series), fed to the turning-point finder, and compared with the stored hourly table over the scoring period | `replay.py`, `hourly_check.py` |
