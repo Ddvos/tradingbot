@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from bisect import bisect_left, insort
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from tradingbot.candles import Candle, Timeframe
-from tradingbot.turning_points import Kind, TurningPoint, fall, rise
+from tradingbot.turning_points import REVERSAL_SIZE, Kind, TurningPoint, fall, rise
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +52,27 @@ def level_of(point: TurningPoint, lifetime: int | None) -> Level:
     return Level(point.kind, point.price, point.time, point.confirmed_at, until)
 
 
+@dataclass(frozen=True, slots=True)
+class SwingExtreme:
+    """A swing extreme as detector three read it, with the span of candles that read it.
+
+    The dashboard draws exactly this span, so the chart shows what the detector
+    read: the price its next mark is measured against, from the candle it first
+    read it on until the candle before a new extreme replaced it.
+    """
+
+    kind: Kind
+    """TOP for the extreme of an up-swing, a possible top; BOTTOM for a down-swing's."""
+    price: float
+    time: int
+    """Start time of the fifteen-minute candle holding the extreme."""
+    active_from: int
+    """Start time of the first candle the detector read it on: the extreme's own candle,
+    or the candle on which a newly confirmed turning point made it recompute the swing."""
+    active_until: int | None
+    """Start time of the last candle that read it; None when it still stands at the end."""
+
+
 class Detector(Protocol):
     """What replay asks of a detector.
 
@@ -63,7 +84,9 @@ class Detector(Protocol):
 
     Once, at the end, `levels`: the levels the detector reads from the turning
     points, each with the span of candles that see it, so the result can show
-    them. Empty for a detector that reads no levels.
+    them. Empty for a detector that reads no levels. Likewise `swing_extremes`:
+    every swing extreme the detector read during the replay, each with the
+    span of candles that read it; empty for a detector that tracks no swing.
     """
 
     name: str
@@ -73,6 +96,8 @@ class Detector(Protocol):
     def mark(self, candles: Sequence[Candle], levels: Sequence[TurningPoint]) -> Kind | None: ...
 
     def levels(self, points: Sequence[TurningPoint]) -> list[Level]: ...
+
+    def swing_extremes(self) -> list[SwingExtreme]: ...
 
 
 FLOOR_DISTANCE = 0.03
@@ -124,6 +149,9 @@ class FloorDetector:
         return None
 
     def levels(self, points: Sequence[TurningPoint]) -> list[Level]:
+        return []
+
+    def swing_extremes(self) -> list[SwingExtreme]:
         return []
 
 
@@ -231,6 +259,9 @@ class DetectorOne:
     def levels(self, points: Sequence[TurningPoint]) -> list[Level]:
         return [level_of(point, None) for point in points]
 
+    def swing_extremes(self) -> list[SwingExtreme]:
+        return []
+
 
 LEVEL_LIFETIME = 30 * 24 * 3600
 """Detector two's level lifetime, fixed in slice 4 (#16): a level is seen until
@@ -272,10 +303,177 @@ class DetectorTwo:
     def levels(self, points: Sequence[TurningPoint]) -> list[Level]:
         return [level_of(point, LEVEL_LIFETIME) for point in points]
 
+    def swing_extremes(self) -> list[SwingExtreme]:
+        return []
+
+
+class Swing:
+    """One side of detector three: the up-swing whose end would be a top, or its mirror.
+
+    On the top side the swing starts at the swing low, the lowest fifteen-minute
+    low at or after the start of the hour holding the last confirmed top, and
+    its extreme is the highest high since that low, the low's candle included.
+    The bottom side mirrors every comparison: it starts at the swing high since
+    the last confirmed bottom's hour and its extreme is the lowest low since.
+    """
+
+    def __init__(self, kind: Kind) -> None:
+        self.kind = kind
+        self.start: float | None = None
+        """The swing low (top side) or swing high (bottom side); None until a turning
+        point of this side's kind has been confirmed."""
+        self.extreme: Candle | None = None
+        """The candle holding the swing extreme."""
+        self.armed = False
+        """Whether the next candle short of the extreme gets a mark."""
+        self.extremes: list[SwingExtreme] = []
+        """Every extreme read so far with its span; the last one is still standing."""
+        self._latest: int | None = None
+        """Start time of the latest candle this side has been read on."""
+
+    def _start_of(self, candle: Candle) -> float:
+        return candle.low if self.kind is Kind.TOP else candle.high
+
+    def _extreme_of(self, candle: Candle) -> float:
+        return candle.high if self.kind is Kind.TOP else candle.low
+
+    def _extends(self, price: float, beyond: float) -> bool:
+        """Whether `price` lies further along the swing than `beyond`: above it on the
+        top side, below it on the bottom side."""
+        return price > beyond if self.kind is Kind.TOP else price < beyond
+
+    def reset(self, candles: Sequence[Candle], since: int) -> None:
+        """Recompute the swing from the candles at or after `since`, the start of the hour
+        holding a newly confirmed turning point of this side's kind, and arm.
+
+        Equal lows (or highs) keep the earlier candle, as the candle-by-candle
+        update does, since only a strictly lower low moves the swing low.
+        """
+        first = bisect_left(candles, since, key=lambda c: c.time)
+        start = first
+        for i in range(first, len(candles)):
+            if self._extends(self._start_of(candles[start]), self._start_of(candles[i])):
+                start = i
+        extreme = candles[start]
+        for candle in candles[start:]:
+            if self._extends(self._extreme_of(candle), self._extreme_of(extreme)):
+                extreme = candle
+        self.start = self._start_of(candles[start])
+        self._stand(extreme, read_from=candles[-1].time)
+        self.armed = True
+
+    def update(self, candle: Candle) -> None:
+        """Extend the swing by the latest candle: a new swing low restarts the extreme at
+        this candle and arms; a new extreme arms."""
+        if self.start is None or self.extreme is None:
+            return
+        if self._extends(self.start, self._start_of(candle)):
+            self.start = self._start_of(candle)
+            self._stand(candle, read_from=candle.time)
+            self.armed = True
+        elif self._extends(self._extreme_of(candle), self._extreme_of(self.extreme)):
+            self._stand(candle, read_from=candle.time)
+            self.armed = True
+
+    def _stand(self, candle: Candle, read_from: int) -> None:
+        """Make `candle` hold the extreme, read from `read_from` on. The extreme standing
+        until now was last read on the previous candle; a recompute that lands on the
+        candle already holding it changes nothing."""
+        if self.extreme is not None and self.extreme.time == candle.time:
+            return
+        if self.extremes:
+            self.extremes[-1] = replace(self.extremes[-1], active_until=self._latest)
+        self.extreme = candle
+        self.extremes.append(
+            SwingExtreme(self.kind, self._extreme_of(candle), candle.time, read_from, None)
+        )
+
+    def read_on(self, time: int) -> None:
+        """Note that the side has been read on the candle starting at `time`."""
+        self._latest = time
+
+    def reached(self) -> bool:
+        """Whether the swing has reached the reversal size: `extreme >= swing low x 1.08`
+        on the top side, `extreme <= swing high x 0.92` on the bottom side."""
+        if self.start is None or self.extreme is None:
+            return False
+        extreme = self._extreme_of(self.extreme)
+        if self.kind is Kind.TOP:
+            return extreme >= self.start * (1 + REVERSAL_SIZE)
+        return extreme <= self.start * (1 - REVERSAL_SIZE)
+
+    def size(self) -> float:
+        """The swing as a fraction of its start, for the tie rule; 0 before it exists."""
+        if self.start is None or self.extreme is None:
+            return 0.0
+        extreme = self._extreme_of(self.extreme)
+        return rise(self.start, extreme) if self.kind is Kind.TOP else fall(self.start, extreme)
+
+    def due(self, candle: Candle) -> bool:
+        """Whether this side marks `candle`: armed, the candle short of the extreme, and
+        the swing at least the reversal size."""
+        if self.extreme is None or not self.armed:
+            return False
+        short = self._extends(self._extreme_of(self.extreme), self._extreme_of(candle))
+        return short and self.reached()
+
+
+class DetectorThree:
+    """Detector three: the swing rule on fifteen-minute candles (#20), the first
+    iteration of family two.
+
+    It reads the fifteen-minute candles so far and the hourly turning points
+    confirmed so far, nothing else (ADR-0003); its only number is the reversal
+    size. A top mark goes on the first candle whose high stays below the swing
+    extreme once the up-swing, from the swing low to that extreme, is at least
+    the reversal size; a new extreme, a new swing low or a newly confirmed top
+    arms the next mark, and a mark disarms its side until then. Bottoms are the
+    mirror image. When one candle qualifies for both, the side whose swing is
+    larger in percent wins and equal swings give no mark; the other side keeps
+    its arming. At most one mark per candle.
+    """
+
+    name = "three"
+    timeframe = Timeframe.M15
+
+    def __init__(self) -> None:
+        self._up = Swing(Kind.TOP)
+        self._down = Swing(Kind.BOTTOM)
+        self._known = 0
+        """How many of the turning points handed over have been read."""
+
+    def mark(self, candles: Sequence[Candle], levels: Sequence[TurningPoint]) -> Kind | None:
+        latest = candles[-1]
+        for point in levels[self._known :]:
+            side = self._up if point.kind is Kind.TOP else self._down
+            side.reset(candles, point.time)
+        self._known = len(levels)
+        self._up.update(latest)
+        self._down.update(latest)
+        top_due, bottom_due = self._up.due(latest), self._down.due(latest)
+        kind: Kind | None = None
+        if top_due and (not bottom_due or self._up.size() > self._down.size()):
+            self._up.armed = False
+            kind = Kind.TOP
+        elif bottom_due and (not top_due or self._down.size() > self._up.size()):
+            self._down.armed = False
+            kind = Kind.BOTTOM
+        self._up.read_on(latest.time)
+        self._down.read_on(latest.time)
+        return kind
+
+    def levels(self, points: Sequence[TurningPoint]) -> list[Level]:
+        return []
+
+    def swing_extremes(self) -> list[SwingExtreme]:
+        """Every extreme either side read, in the order the detector started reading them."""
+        return sorted(self._up.extremes + self._down.extremes, key=lambda e: e.active_from)
+
 
 DETECTORS: dict[str, Callable[[], Detector]] = {
     FloorDetector.name: FloorDetector,
     DetectorOne.name: DetectorOne,
     DetectorTwo.name: DetectorTwo,
+    DetectorThree.name: DetectorThree,
 }
 """Every detector by name; each entry builds a fresh, stateless-at-start instance."""

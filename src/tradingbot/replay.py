@@ -28,7 +28,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 
 from tradingbot.candles import Candle, Timeframe, merge, period_start
-from tradingbot.detectors import Detector, Level, Mark
+from tradingbot.detectors import Detector, Level, Mark, SwingExtreme
 from tradingbot.scoring import ERAS, TOLERANCE, Era, Score, Tolerance, match_marks, score
 from tradingbot.turning_points import Kind, TurningPoint, TurningPointFinder
 
@@ -131,6 +131,7 @@ class Replayed:
     still become a turning point once it had completed. It never moves backwards."""
     turning_points: list[TurningPoint]
     levels: list[Level]
+    swing_extremes: list[SwingExtreme]
     marks: list[Mark]
 
 
@@ -162,6 +163,7 @@ def replay_all(candles: Sequence[Candle], detector: Detector) -> Replayed:
         pending_index,
         points,
         detector.levels(points),
+        detector.swing_extremes(),
         marks,
     )
 
@@ -196,6 +198,8 @@ class ReplayResult:
     """Every turning point of the series, in and before the scored period."""
     levels: list[Level]
     """The levels the detector read, with the candles that saw them; what the chart draws."""
+    swing_extremes: list[SwingExtreme]
+    """The swing extremes the detector read, with the candles that read them; drawn likewise."""
     marks: list[MarkOutcome]
     """Every mark the detector placed, with its outcome where it was scored."""
     score: Score
@@ -292,6 +296,7 @@ def score_replayed(
         replayed.candles,
         replayed.turning_points,
         replayed.levels,
+        replayed.swing_extremes,
         outcomes,
         score(outcome, eras),
     )

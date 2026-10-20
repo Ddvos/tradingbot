@@ -12,21 +12,21 @@
 		type UTCTimestamp
 	} from 'lightweight-charts';
 	import type { Candle, TurningPoint } from '#lib/api.ts';
-	import { COLORS, levelKey, toMarkers, type ChartLevel, type ChartMark } from '#lib/chart.ts';
+	import { toMarkers, type ChartLine, type ChartMark } from '#lib/chart.ts';
 
 	let {
 		candles,
 		visible,
 		turningPoints = [],
-		levels = [],
+		lines = [],
 		marks = []
 	}: {
 		candles: Candle[];
 		/** How many candles to show, oldest first; all of them when omitted. */
 		visible?: number;
 		turningPoints?: TurningPoint[];
-		/** The levels to draw, each as a line from its first candle to its latest. */
-		levels?: ChartLevel[];
+		/** The lines to draw, levels and swing extremes, each from its first candle to its latest. */
+		lines?: ChartLine[];
 		marks?: ChartMark[];
 	} = $props();
 
@@ -39,9 +39,9 @@
 	// not a full `setData`: replay appends thousands of candles per second.
 	let shownCandles: Candle[] | undefined;
 	let shownCount = 0;
-	// One line series per level drawn, by its key, added when the level first appears
-	// and removed when it is no longer in `levels`.
-	const levelSeries = new Map<string, ISeriesApi<'Line'>>();
+	// One line series per line drawn, by its key, added when the line first appears
+	// and removed when it is no longer in `lines`.
+	const lineSeries = new Map<string, ISeriesApi<'Line'>>();
 
 	const toCandlestick = (c: Candle) => ({
 		time: c.time as UTCTimestamp,
@@ -92,30 +92,30 @@
 
 	$effect(() => {
 		if (!chart) return;
-		const wanted = new Map(levels.map((level) => [levelKey(level), level]));
-		for (const [key, line] of levelSeries) {
+		const wanted = new Map(lines.map((line) => [line.key, line]));
+		for (const [key, series] of lineSeries) {
 			if (!wanted.has(key)) {
-				chart.removeSeries(line);
-				levelSeries.delete(key);
+				chart.removeSeries(series);
+				lineSeries.delete(key);
 			}
 		}
-		for (const [key, level] of wanted) {
-			let line = levelSeries.get(key);
-			if (!line) {
-				line = chart.addSeries(LineSeries, {
-					color: COLORS.level,
+		for (const [key, line] of wanted) {
+			let series = lineSeries.get(key);
+			if (!series) {
+				series = chart.addSeries(LineSeries, {
+					color: line.color,
 					lineWidth: 1,
 					priceLineVisible: false,
 					lastValueVisible: false,
 					crosshairMarkerVisible: false,
-					// The price scale follows the candles; a level far from the price stays off screen.
+					// The price scale follows the candles; a line far from the price stays off screen.
 					autoscaleInfoProvider: () => null
 				});
-				levelSeries.set(key, line);
+				lineSeries.set(key, series);
 			}
-			const start = { time: level.from as UTCTimestamp, value: level.price };
-			const end = { time: level.to as UTCTimestamp, value: level.price };
-			line.setData(level.to > level.from ? [start, end] : [start]);
+			const start = { time: line.from as UTCTimestamp, value: line.price };
+			const end = { time: line.to as UTCTimestamp, value: line.price };
+			series.setData(line.to > line.from ? [start, end] : [start]);
 		}
 	});
 </script>

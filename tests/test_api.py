@@ -258,6 +258,7 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
         ],
     }
     assert body["levels"] == []  # the floor reads no levels
+    assert body["swing_extremes"] == []  # and tracks no swing
     assert body["timeframe"] == "1h"
     assert body["scored_from"] == 1451606400
 
@@ -389,3 +390,16 @@ def test_on_fifteen_minute_candles_a_turning_point_sits_on_the_candle_holding_th
         ("top", DAY_START + 8 * H, 100.0, DAY_START + 11 * H),
         ("bottom", DAY_START + 12 * H, 90.0, DAY_START + 14 * H),
     ]
+
+
+def test_detector_three_is_replayed_on_the_fifteen_minute_candles(
+    two_table_client: TestClient,
+) -> None:
+    body = two_table_client.get("/replay", params={"detector": "three"}).json()
+
+    assert body["detector"] == "three"
+    assert body["timeframe"] == "15m"
+    assert [c["time"] for c in body["candles"]] == [DAY_START + 3 * H + q * Q for q in range(4)]
+    assert body["marks"] == [] and body["levels"] == []
+    assert body["swing_extremes"] == []  # one hour confirms no turning point
+    assert body["score"]["turning_points"] == 0
