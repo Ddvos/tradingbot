@@ -11,8 +11,23 @@ export interface ChartMark {
 	timing: number | null;
 }
 
+/** A level as the chart draws it: a horizontal line over the candles that have seen it so far. */
+export interface ChartLevel {
+	kind: Kind;
+	/** Start time of the turning point's candle; with the kind, it identifies the level. */
+	time: number;
+	price: number;
+	/** Start time of the first candle that saw the level. */
+	from: number;
+	/** Start time of the latest shown candle that still sees it. */
+	to: number;
+}
+
+export const levelKey = (level: ChartLevel) => `${level.kind}@${level.time}`;
+
 export const COLORS = {
 	turningPoint: '#2962ff',
+	level: '#ff9800',
 	pending: '#9e9e9e',
 	hit: '#2e7d32',
 	false: '#c62828'

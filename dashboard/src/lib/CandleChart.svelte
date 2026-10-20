@@ -4,6 +4,7 @@
 		CandlestickSeries,
 		createChart,
 		createSeriesMarkers,
+		LineSeries,
 		type IChartApi,
 		type ISeriesApi,
 		type ISeriesMarkersPluginApi,
@@ -11,18 +12,21 @@
 		type UTCTimestamp
 	} from 'lightweight-charts';
 	import type { Candle, TurningPoint } from '#lib/api.ts';
-	import { toMarkers, type ChartMark } from '#lib/chart.ts';
+	import { COLORS, levelKey, toMarkers, type ChartLevel, type ChartMark } from '#lib/chart.ts';
 
 	let {
 		candles,
 		visible,
 		turningPoints = [],
+		levels = [],
 		marks = []
 	}: {
 		candles: Candle[];
 		/** How many candles to show, oldest first; all of them when omitted. */
 		visible?: number;
 		turningPoints?: TurningPoint[];
+		/** The levels to draw, each as a line from its first candle to its latest. */
+		levels?: ChartLevel[];
 		marks?: ChartMark[];
 	} = $props();
 
@@ -35,6 +39,9 @@
 	// not a full `setData`: replay appends thousands of candles per second.
 	let shownCandles: Candle[] | undefined;
 	let shownCount = 0;
+	// One line series per level drawn, by its key, added when the level first appears
+	// and removed when it is no longer in `levels`.
+	const levelSeries = new Map<string, ISeriesApi<'Line'>>();
 
 	const toCandlestick = (c: Candle) => ({
 		time: c.time as UTCTimestamp,
@@ -81,6 +88,35 @@
 
 	$effect(() => {
 		markers?.setMarkers(toMarkers(turningPoints, marks));
+	});
+
+	$effect(() => {
+		if (!chart) return;
+		const wanted = new Map(levels.map((level) => [levelKey(level), level]));
+		for (const [key, line] of levelSeries) {
+			if (!wanted.has(key)) {
+				chart.removeSeries(line);
+				levelSeries.delete(key);
+			}
+		}
+		for (const [key, level] of wanted) {
+			let line = levelSeries.get(key);
+			if (!line) {
+				line = chart.addSeries(LineSeries, {
+					color: COLORS.level,
+					lineWidth: 1,
+					priceLineVisible: false,
+					lastValueVisible: false,
+					crosshairMarkerVisible: false,
+					// The price scale follows the candles; a level far from the price stays off screen.
+					autoscaleInfoProvider: () => null
+				});
+				levelSeries.set(key, line);
+			}
+			const start = { time: level.from as UTCTimestamp, value: level.price };
+			const end = { time: level.to as UTCTimestamp, value: level.price };
+			line.setData(level.to > level.from ? [start, end] : [start]);
+		}
 	});
 </script>
 

@@ -6,8 +6,8 @@ whole periods, so a 4-hour or daily candle is always built from every hour it
 covers. `GET /turning-points?timeframe=...` answers the hindsight turning points of
 the whole development period, on the candle of the requested timeframe that
 holds the hourly extreme. `GET /replay?detector=...` replays the development
-period's hourly candles through a detector and answers its marks, their
-outcomes and the score.
+period's hourly candles through a detector and answers the levels it read,
+its marks, their outcomes and the score.
 
 Every route reads through `read_development`, so nothing past the
 out-of-sample boundary is ever served.
@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from tradingbot.candles import Candle, Timeframe, resample
-from tradingbot.detectors import DETECTORS
+from tradingbot.detectors import DETECTORS, Level
 from tradingbot.development import read_development
 from tradingbot.replay import MarkOutcome, ReplayResult, run
 from tradingbot.scoring import Score
@@ -46,6 +46,7 @@ class ReplayOut(BaseModel):
     detector: str
     candles: list[Candle]
     turning_points: list[TurningPoint]
+    levels: list[Level]
     marks: list[MarkOutcome]
     score: Score
 
@@ -55,6 +56,7 @@ class ReplayOut(BaseModel):
             detector=result.detector,
             candles=result.candles,
             turning_points=result.turning_points,
+            levels=result.levels,
             marks=result.marks,
             score=result.score,
         )

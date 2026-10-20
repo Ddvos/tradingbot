@@ -2,7 +2,7 @@
 
 A bot that finds Bitcoin's turning points on a chart and, once it does that well, trades them with real money on Kraken. The vocabulary is in `GLOSSARY.md`; the decisions are in `docs/adr/`.
 
-Slice 1 put the hourly history of Kraken spot `XBTUSD` in one SQLite file, resampled to 4-hour and daily candles, served by a small API and shown as candlesticks in a dashboard. Slice 2 added the harness that judges a detector before any detector exists: the true tops and bottoms of the history in hindsight, a replay that hands candles to a detector one hour at a time, the floor detector every candidate must beat, and the score. Slice 3 adds detector one, the first candidate, pre-registered in issue #12 and judged by that harness, and the one explicit command that reads past the out-of-sample boundary. No trading yet.
+Slice 1 put the hourly history of Kraken spot `XBTUSD` in one SQLite file, resampled to 4-hour and daily candles, served by a small API and shown as candlesticks in a dashboard. Slice 2 added the harness that judges a detector before any detector exists: the true tops and bottoms of the history in hindsight, a replay that hands candles to a detector one hour at a time, the floor detector every candidate must beat, and the score. Slice 3 added detector one, the first candidate, pre-registered in issue #12 and judged by that harness, and the one explicit command that reads past the out-of-sample boundary. Slice 4 adds detector two, the second iteration of the same family, pre-registered in issue #16: detector one's rule with levels that expire after 30 days, and the levels drawn on the replay chart. No trading yet.
 
 ## Requirements
 
@@ -58,7 +58,7 @@ uv run tradingbot serve
 
 Serves `GET http://localhost:8000/candles?timeframe=1h|4h|1d&from=...&to=...`. `from` and `to` are optional, as Unix seconds or ISO 8601 (`2024-01-01T00:00:00Z`), and are widened to whole periods, so 4-hour and daily candles are always built from every hour they cover. 4-hour candles start at 00:00, 04:00, ... UTC; daily candles at 00:00 UTC. Interactive docs are at `http://localhost:8000/docs`.
 
-Two more routes serve the harness over the whole development period: `GET /turning-points?timeframe=1h|4h|1d` answers the turning points (on 4h and 1d they sit on the candle that holds the hourly extreme), and `GET /replay?detector=floor` replays the hourly candles through a detector and answers the candles, the turning points, every mark with its outcome, and the score. All three routes stop at the out-of-sample boundary (see below).
+Two more routes serve the harness over the whole development period: `GET /turning-points?timeframe=1h|4h|1d` answers the turning points (on 4h and 1d they sit on the candle that holds the hourly extreme), and `GET /replay?detector=floor` replays the hourly candles through a detector and answers the candles, the turning points, the levels the detector read with their active spans, every mark with its outcome, and the score. All three routes stop at the out-of-sample boundary (see below).
 
 ## Start the dashboard
 
@@ -70,7 +70,7 @@ One page, two modes. It reads from the API, so start that first.
 
 **Hindsight** shows the whole development period as candlesticks with a 1h / 4h / 1d switch and the true turning points drawn as blue dots on their extremes.
 
-**Replay** hands the hourly candles to the chosen detector (`floor` or `one`) one at a time. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from nothing. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in candles) or red (false mark) as soon as no later candle can change it: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's tolerance. Turning points appear as they are confirmed. The line under the controls is the detector's score over the whole development period, the same number the batch command prints.
+**Replay** hands the hourly candles to the chosen detector (`floor`, `one` or `two`) one at a time. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from nothing. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in candles) or red (false mark) as soon as no later candle can change it: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's tolerance. Turning points appear as they are confirmed. The levels the detector sees at the latest candle are drawn as orange lines, each from the candle that confirmed its turning point up to the latest candle, and a line disappears when its level expires; the floor reads no levels, so it draws none. The line under the controls is the detector's score over the whole development period, the same number the batch command prints.
 
 ## Replay from the command line
 
@@ -78,7 +78,7 @@ One page, two modes. It reads from the API, so start that first.
 uv run tradingbot replay floor
 ```
 
-Replays the development period through the named detector, prints its score and writes the chart data (the same JSON the API answers for `/replay`) to `replay-<detector>.json` next to the store, or to `--out`. The score is identical run to run. Two detectors exist: `floor`, the reference, and `one`, the first candidate. This is the floor's score over the real development period, recorded on issue #11:
+Replays the development period through the named detector, prints its score and writes the chart data (the same JSON the API answers for `/replay`) to `replay-<detector>.json` next to the store, or to `--out`. The score is identical run to run. Three detectors exist: `floor`, the reference, `one`, the first candidate, and `two`, its second iteration. This is the floor's score over the real development period, recorded on issue #11:
 
 ```
 Replayed floor over the development period: 85857 candles from 2013-10-06T21:00:00Z to 2024-10-18T23:00:00Z.
@@ -90,7 +90,7 @@ Replayed floor over the development period: 85857 candles from 2013-10-06T21:00:
   median give-up   0.32%
 ```
 
-Detector one's score is not in this file on purpose: issue #12 pre-registers its success criterion, and its one development run and its verdict are recorded as comments there.
+Detector one's and detector two's scores are not in this file on purpose: issues #12 and #16 pre-register their success criteria, and each one's single development run and verdict are recorded as comments there.
 
 ## Definitions fixed in slice 2
 
@@ -118,6 +118,17 @@ Fixed in issue #12 before detector one's first run, with the same rule: changing
 | Run | at least 3 consecutive higher highs (or lower lows) ending at the previous candle; a higher high is a candle whose high is above the previous candle's high | `detectors.py` |
 | Detector one | a top on a candle in a zone whose high stays below the previous candle's after a run of higher highs; a bottom is the mirror on the lows; no mark outside a zone. When one candle fails both runs, the longer run wins and equal runs give no mark, since a candle gets at most one mark | `detectors.py` |
 | Out-of-sample check | the whole history replayed, so the detector keeps its levels across the boundary; only candles, marks and turning points from the boundary on are kept and scored among themselves; one run per detector, each run logged | `out_of_sample.py` |
+
+## Definitions fixed in slice 4
+
+Fixed in issue #16 before detector two's first run, same rule again. Issue #16 also records the hindsight facts about the development period that led to them.
+
+| Definition | Value | Where |
+| --- | --- | --- |
+| Level lifetime | a level is seen from the candle that confirms its turning point until 30 days (30 × 24 hours of calendar time, not candles) after the start of the turning point's own candle, inclusive; nothing renews or consumes it | `detectors.py` |
+| Detector two | detector one's rule, zone, run and tie rule unchanged, with those levels | `detectors.py` |
+| Give-up criterion | median give-up at most 1.0%, an absolute bar, replacing "lower than the floor's": the floor's 0.32% is unreachable by construction, since even a mark at the close of the extreme candle is a median 1.70% from the extreme over the development period; the floor's hits are coincidences from neighbouring swings | issue #16 |
+| Levels in the chart data | every replay answers the levels the detector read, each with the first and the last candle that sees it, so the dashboard draws what the detector used | `replay.py` |
 
 ## The out-of-sample boundary
 
@@ -151,7 +162,7 @@ src/tradingbot/
   sync.py            archive import and catch-up, the two ways the store is updated
   development.py     the out-of-sample boundary and the only way to read development candles
   turning_points.py  turning points in hindsight, found one candle at a time
-  detectors.py       the Detector interface, Mark, the floor detector and detector one
+  detectors.py       the Detector interface, Mark, Level, the floor detector, detector one and two
   scoring.py         hits, misses, false marks, timing, give-up and the score
   replay.py          replay: candles to a detector one at a time, then the score
   out_of_sample.py   the one explicit check past the boundary, logged per run
