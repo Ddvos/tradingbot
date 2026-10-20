@@ -118,6 +118,7 @@ def test_the_score_sums_up_the_outcome() -> None:
         false_marks=2,
         hit_rate=2 / 3,
         false_mark_rate=0.5,
+        false_marks_per_hit=1.0,
         median_timing=0.5,
         median_give_up=1.5,
     )
@@ -127,8 +128,40 @@ def test_a_score_without_hits_has_no_timing_or_give_up() -> None:
     result = score(match_marks(flat_series(10), [], []))
 
     assert result == Score(
-        0, 0, 0, 0, hit_rate=0.0, false_mark_rate=0.0, median_timing=None, median_give_up=None
+        0,
+        0,
+        0,
+        0,
+        hit_rate=0.0,
+        false_mark_rate=0.0,
+        false_marks_per_hit=0.0,
+        median_timing=None,
+        median_give_up=None,
     )
+
+
+def test_false_marks_per_hit_is_the_false_marks_divided_by_the_hits() -> None:
+    point = top(10, 100.0)
+    marks = [
+        Mark(Kind.TOP, at(13), price=99.0),  # hit
+        Mark(Kind.TOP, at(40), price=90.0),  # false
+        Mark(Kind.TOP, at(60), price=90.0),  # false
+        Mark(Kind.BOTTOM, at(70), price=90.0),  # false
+    ]
+
+    result = score(match_marks(flat_series(100), marks, [point]))
+
+    assert (result.hits, result.false_marks, result.false_marks_per_hit) == (1, 3, 3.0)
+
+
+def test_false_marks_per_hit_is_zero_without_hits_and_without_false_marks() -> None:
+    only_false = score(match_marks(flat_series(100), [Mark(Kind.TOP, at(40), price=90.0)], []))
+    only_hit = score(
+        match_marks(flat_series(100), [Mark(Kind.TOP, at(13), price=99.0)], [top(10, 100.0)])
+    )
+
+    assert (only_false.hits, only_false.false_marks, only_false.false_marks_per_hit) == (0, 1, 0.0)
+    assert (only_hit.hits, only_hit.false_marks, only_hit.false_marks_per_hit) == (1, 0, 0.0)
 
 
 def series_with_a_top_whose_candle_closes_five_percent_below_it() -> list[Candle]:
@@ -231,15 +264,32 @@ def test_the_score_is_split_per_era() -> None:
             false_marks=0,
             hit_rate=0.5,
             false_mark_rate=0.0,
+            false_marks_per_hit=0.0,
             median_timing=2,
             median_give_up=1.0,
         ),
     )
     assert result.eras[1].score == Score(
-        0, 1, 0, 1, hit_rate=0.0, false_mark_rate=1.0, median_timing=None, median_give_up=None
+        0,
+        1,
+        0,
+        1,
+        hit_rate=0.0,
+        false_mark_rate=1.0,
+        false_marks_per_hit=0.0,
+        median_timing=None,
+        median_give_up=None,
     )
     assert result.eras[2].score == Score(
-        1, 2, 1, 1, hit_rate=1.0, false_mark_rate=0.5, median_timing=-1, median_give_up=0.5
+        1,
+        2,
+        1,
+        1,
+        hit_rate=1.0,
+        false_mark_rate=0.5,
+        false_marks_per_hit=1.0,
+        median_timing=-1,
+        median_give_up=0.5,
     )
 
 
@@ -257,17 +307,89 @@ def test_a_hit_across_an_era_boundary_counts_in_its_turning_points_era() -> None
     assert (result.eras[1].score.hits, result.eras[1].score.marks) == (1, 1)
 
 
+def test_describe_score_prints_the_false_marks_per_hit_after_the_false_mark_rate() -> None:
+    whole = Score(
+        3,
+        4,
+        2,
+        2,
+        hit_rate=2 / 3,
+        false_mark_rate=0.5,
+        false_marks_per_hit=1.0,
+        median_timing=0.5,
+        median_give_up=1.5,
+    )
+
+    lines = describe_score(whole)
+
+    assert [label for label, _ in lines] == [
+        "turning points",
+        "marks",
+        "hits",
+        "false marks",
+        "false marks/hit",
+        "median timing",
+        "median give-up",
+    ]
+    assert lines[3:5] == [
+        ("false marks", "2  (false-mark rate 50.0%)"),
+        ("false marks/hit", "1.0 per hit"),
+    ]
+
+
+def test_describe_score_rounds_the_false_marks_per_hit_to_one_decimal() -> None:
+    # The recorded run of detector three (#20): 4,698 false marks against 719 hits.
+    recorded = Score(
+        798,
+        5417,
+        719,
+        4698,
+        hit_rate=719 / 798,
+        false_mark_rate=4698 / 5417,
+        false_marks_per_hit=4698 / 719,
+        median_timing=0.0,
+        median_give_up=1.31,
+    )
+
+    assert ("false marks/hit", "6.5 per hit") in describe_score(recorded)
+
+
+def test_describe_score_says_n_a_for_a_period_with_marks_but_no_hits() -> None:
+    only_false = score(match_marks(flat_series(100), [Mark(Kind.TOP, at(40), price=90.0)], []))
+    nothing = score(match_marks(flat_series(100), [], []))
+
+    assert ("false marks/hit", "n/a (no hits)") in describe_score(only_false)
+    assert ("false marks/hit", "0.0 per hit") in describe_score(nothing)
+
+
 def test_describe_score_prints_one_line_per_era() -> None:
     whole = Score(
-        3, 4, 2, 2, hit_rate=2 / 3, false_mark_rate=0.5, median_timing=0.5, median_give_up=1.5
+        3,
+        4,
+        2,
+        2,
+        hit_rate=2 / 3,
+        false_mark_rate=0.5,
+        false_marks_per_hit=1.0,
+        median_timing=0.5,
+        median_give_up=1.5,
     )
     era = Score(
-        2, 1, 1, 0, hit_rate=0.5, false_mark_rate=0.0, median_timing=2.0, median_give_up=1.0
+        2,
+        1,
+        1,
+        0,
+        hit_rate=0.5,
+        false_mark_rate=0.0,
+        false_marks_per_hit=0.0,
+        median_timing=2.0,
+        median_give_up=1.0,
     )
     scored = Score(
         *(getattr(whole, f) for f in ("turning_points", "marks", "hits", "false_marks")),
         hit_rate=whole.hit_rate,
         false_mark_rate=whole.false_mark_rate,
+        false_marks_per_hit=whole.false_marks_per_hit,
         median_timing=whole.median_timing,
         median_give_up=whole.median_give_up,
         eras=(EraScore(ERAS[0], era),),
@@ -275,12 +397,26 @@ def test_describe_score_prints_one_line_per_era() -> None:
 
     lines = describe_score(scored)
 
-    assert lines[:6] == describe_score(whole)
-    assert lines[6] == (
+    assert lines[:7] == describe_score(whole)
+    assert lines[7] == (
         "2016-2018",
         "2 turning points, 1 marks, 1 hits (hit rate 50.0%), 0 false marks (false-mark rate 0.0%), "
-        "median timing +2.0 candles (late), median give-up 1.00%",
+        "0.0 per hit, median timing +2.0 candles (late), median give-up 1.00%",
     )
+
+
+def test_an_era_line_says_n_a_for_marks_but_no_hits() -> None:
+    first = ERAS[0]
+    candles = [
+        Candle(t, 100.0, 100.0, 100.0, 100.0, 1.0, 1) for t in range(first.start, first.end, H)
+    ]
+
+    lines = describe_score(
+        score(match_marks(candles, [Mark(Kind.TOP, in_era(first, 5), 100.0)], []), ERAS)
+    )
+
+    assert lines[7][0] == "2016-2018"
+    assert "1 false marks (false-mark rate 100.0%), n/a (no hits), median timing" in lines[7][1]
 
 
 def test_a_score_without_eras_has_none() -> None:

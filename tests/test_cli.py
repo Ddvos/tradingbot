@@ -118,6 +118,7 @@ def test_replay_prints_the_floor_score_and_writes_the_chart_data(
     )
     assert "scored over the scoring period: 15 candles from 2024-01-01T00:00:00Z" in printed
     assert "turning points" in printed and "hit rate" in printed and "false-mark rate" in printed
+    assert "  false marks/hit  " in printed and " per hit" in printed
     assert "median timing" in printed and "median give-up" in printed
     assert "  2016-2018 " in printed and "  2019-2021 " in printed and "  2022-2024 " in printed
     assert out.exists()
@@ -256,7 +257,7 @@ def test_out_of_sample_scores_only_the_candles_past_the_boundary_and_logs_the_ru
     printed = capsys.readouterr().out
     assert "Replayed floor over 600 candles" in printed
     assert "scored out of sample: 300 candles from 2024-10-19T00:00:00Z" in printed
-    assert "hit rate" in printed and "false-mark rate" in printed
+    assert "hit rate" in printed and "false-mark rate" in printed and " per hit" in printed
     assert "out-of-sample.log" in printed
     data = json.loads(out.read_text())
     assert data["detector"] == "floor"
@@ -314,10 +315,10 @@ def test_re_score_reports_the_recorded_run_under_the_current_definitions(
     main(["re-score", "floor", "--recorded", str(recorded)])
 
     printed = capsys.readouterr().out
-    assert "Re-scored floor under ADR-0005" in printed
+    assert "Re-scored floor under ADR-0007" in printed
     assert "4 marks, identical" in printed and "replay-floor.json" in printed
     assert "Replayed floor over 15 candles" in printed
-    assert "hit rate" in printed and "  2022-2024 " in printed
+    assert "hit rate" in printed and " per hit" in printed and "  2022-2024 " in printed
 
 
 def test_re_score_refuses_when_the_marks_differ_from_the_recorded_run(

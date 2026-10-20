@@ -17,7 +17,7 @@ from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY, read_development
 from tradingbot.hourly_check import check_hourly
 from tradingbot.kraken import REST_REACH, KrakenSpot
 from tradingbot.replay import ReplayResult, run
-from tradingbot.scoring import SCORING_START, describe_score
+from tradingbot.scoring import HARNESS_ADR, SCORING_START, describe_score
 from tradingbot.store import STORED_TIMEFRAMES, CandleStore
 from tradingbot.sync import catch_up, import_archive
 
@@ -134,8 +134,8 @@ def run_re_score(db: Path, name: str, recorded: Path | None) -> None:
     except re_score.Refused as refused:
         sys.exit(str(refused))
     print(
-        f"Re-scored {name} under ADR-0005: {scored.marks} marks, identical in number and time "
-        f"to the recorded run in {recorded}."
+        f"Re-scored {name} under {HARNESS_ADR}: {scored.marks} marks, identical in number and "
+        f"time to the recorded run in {recorded}."
     )
     print(report(scored.result, "over the scoring period"))
 

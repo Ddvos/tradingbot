@@ -185,6 +185,11 @@
 	const utc = (seconds: number) => new Date(seconds * 1000).toISOString().slice(0, 16) + 'Z';
 	const percent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
 	const signed = (candles: number) => (candles > 0 ? `+${candles}` : `${candles}`);
+	/** False marks per hit as the batch command prints them: n/a when marks found no hit. */
+	const perHit = (score: Score) =>
+		score.marks > 0 && score.hits === 0
+			? 'n/a (no hits)'
+			: `${score.false_marks_per_hit.toFixed(1)} per hit`;
 
 	function describe(score: Score): string {
 		const timing =
@@ -193,7 +198,8 @@
 				: `median timing ${signed(score.median_timing)} candles, median give-up ${score.median_give_up?.toFixed(2)}%`;
 		return (
 			`${score.turning_points} turning points, ${score.marks} marks, ` +
-			`hit rate ${percent(score.hit_rate)}, false-mark rate ${percent(score.false_mark_rate)}, ${timing}`
+			`hit rate ${percent(score.hit_rate)}, false-mark rate ${percent(score.false_mark_rate)}, ` +
+			`${perHit(score)}, ${timing}`
 		);
 	}
 </script>

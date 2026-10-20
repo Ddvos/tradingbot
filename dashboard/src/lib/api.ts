@@ -89,6 +89,8 @@ export interface Score {
 	false_marks: number;
 	hit_rate: number;
 	false_mark_rate: number;
+	/** False marks divided by hits (ADR-0007); 0 without hits. */
+	false_marks_per_hit: number;
 	/** Median timing of the hits in hourly candles; null without hits. */
 	median_timing: number | null;
 	median_give_up: number | null;

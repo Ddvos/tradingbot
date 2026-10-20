@@ -36,6 +36,7 @@ def test_a_run_is_logged_with_its_time_detector_period_and_score(tmp_path: Path)
     assert entry.period == "20 candles from 2024-10-19T00:00:00Z to 2024-10-19T19:00:00Z"
     assert entry.score.startswith("turning points ")
     assert "hit rate" in entry.score and "median give-up" in entry.score
+    assert "false marks/hit" in entry.score
     assert "2022-2024" not in entry.score, "an out-of-sample score has no eras"
     assert result.score.eras == ()
     assert logged_detectors(log) == ["floor"]
