@@ -35,34 +35,21 @@ export const COLORS = {
 	false: '#c62828'
 };
 
-/** Whether a level or a swing extreme is seen on the candle starting at `now`. */
-const seenAt = (span: { active_from: number; active_until: number | null }, now: number) =>
-	span.active_from <= now && (span.active_until === null || now <= span.active_until);
+/** What a level and a swing extreme share: a price with the span of candles that see it. */
+type Span = Pick<Level | SwingExtreme, 'kind' | 'price' | 'time' | 'active_from' | 'active_until'>;
 
-/** The levels the detector sees at the latest shown candle, each drawn up to that candle. */
-export function levelLines(levels: Level[], now: number): ChartLine[] {
-	return levels
-		.filter((l) => seenAt(l, now))
-		.map((l) => ({
-			key: `level:${l.kind}@${l.time}`,
-			price: l.price,
-			from: l.active_from,
+/** The spans seen at the latest shown candle, starting at `now`, each drawn as a line in
+ * `color` from the first candle that saw it up to that candle; `prefix` keeps the keys of
+ * levels and swing extremes apart. */
+export function toLines(spans: Span[], now: number, prefix: string, color: string): ChartLine[] {
+	return spans
+		.filter((s) => s.active_from <= now && (s.active_until === null || now <= s.active_until))
+		.map((s) => ({
+			key: `${prefix}:${s.kind}@${s.time}`,
+			price: s.price,
+			from: s.active_from,
 			to: now,
-			color: COLORS.level
-		}));
-}
-
-/** The swing extremes the detector reads at the latest shown candle, drawn from the candle it
- * first read each on up to that candle. */
-export function swingExtremeLines(extremes: SwingExtreme[], now: number): ChartLine[] {
-	return extremes
-		.filter((e) => seenAt(e, now))
-		.map((e) => ({
-			key: `extreme:${e.kind}@${e.time}`,
-			price: e.price,
-			from: e.active_from,
-			to: now,
-			color: COLORS.swingExtreme
+			color
 		}));
 }
 

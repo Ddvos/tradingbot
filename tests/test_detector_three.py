@@ -7,8 +7,9 @@ candle, so the series' own lows and highs make the swing.
 """
 
 from bisect import bisect_left
+from collections.abc import Callable
 
-from tests.test_replay import quarter_walk
+from tests.walks import quarter_walk
 from tradingbot.candles import Candle
 from tradingbot.detectors import DETECTORS, DetectorThree, Mark, SwingExtreme
 from tradingbot.replay import replay_all, run
@@ -23,19 +24,31 @@ def candle(quarter: int, high: float, low: float, close: float) -> Candle:
     return Candle(T0 + quarter * Q, close, high, low, close, 1.0, 1)
 
 
+Known = Callable[[list[TurningPoint], Candle], list[TurningPoint]]
+
+
 def known_on(points: list[TurningPoint], latest: Candle) -> list[TurningPoint]:
     """The turning points known on `latest`: those confirmed by an hour it completes or an
-    earlier one."""
+    earlier one, as the replay hands them over."""
     return [p for p in points if p.confirmed_at + H <= latest.time + Q]
 
 
+def leaked_on(points: list[TurningPoint], latest: Candle) -> list[TurningPoint]:
+    """The turning points a leaky replay would hand over: known from the first candle of
+    the confirming hour, before that hour has completed."""
+    return [p for p in points if p.confirmed_at <= latest.time]
+
+
 def marks_of(
-    detector: DetectorThree, candles: list[Candle], points: list[TurningPoint]
+    detector: DetectorThree,
+    candles: list[Candle],
+    points: list[TurningPoint],
+    known: Known = known_on,
 ) -> list[Mark]:
     """Hand the detector the candles one at a time, as replay does, and collect its marks."""
     marks: list[Mark] = []
     for i, latest in enumerate(candles):
-        kind = detector.mark(candles[: i + 1], known_on(points, latest))
+        kind = detector.mark(candles[: i + 1], known(points, latest))
         if kind is not None:
             marks.append(Mark(kind, latest.time, latest.close))
     return marks
@@ -192,15 +205,28 @@ def test_equal_swings_give_no_mark_and_disarm_nothing() -> None:
     ]
 
 
-def test_the_decision_on_a_candle_never_depends_on_later_candles_or_turning_points() -> None:
-    points = [TOP_BEFORE, BOTTOM_BEFORE, TOP_AT_HOUR_ONE]
-    whole = marks_of(DetectorThree(), RESET, points)
+LATE_TOP = RESET[:8] + [
+    candle(8, high=98.0, low=92.0, close=93.0),  # hour 2's low, 8% below 100: hour 1 holds a top
+    candle(9, high=99.5, low=93.0, close=99.0),  # 8.2% above 92
+    candle(10, high=99.0, low=95.0, close=97.0),  # short of 99.5
+    candle(11, high=98.0, low=96.0, close=97.0),  # completes hour 2: the top is known; short too
+]
 
-    assert [m.kind for m in whole] == [Kind.TOP, Kind.BOTTOM, Kind.TOP]
-    for i in range(len(RESET)):
-        assert marks_of(DetectorThree(), RESET[: i + 1], points) == [
-            m for m in whole if m.time <= RESET[i].time
-        ]
+
+def test_a_turning_point_is_read_from_the_candle_that_completes_its_hour_not_before() -> None:
+    # Handed the top on hour 2's first candle, the detector would know the swing low of 92
+    # and the extreme of 99.5 a candle early and mark 02:30; handed it on 02:45, as the
+    # replay does, it recomputes the same swing then and marks 02:45.
+    assert marks_of(DetectorThree(), LATE_TOP, [TOP_AT_HOUR_ONE], known=leaked_on) == [
+        Mark(Kind.TOP, T0 + 10 * Q, 97.0)
+    ]
+    assert marks_of(DetectorThree(), LATE_TOP, [TOP_AT_HOUR_ONE]) == [
+        Mark(Kind.TOP, T0 + 11 * Q, 97.0)
+    ]
+    assert [(m.kind, m.time) for m in run(LATE_TOP, DetectorThree()).marks] == [
+        (Kind.BOTTOM, T0 + 9 * Q),  # 92 is 8% below the swing high of 100, known since 01:45
+        (Kind.TOP, T0 + 11 * Q),
+    ]
 
 
 def extremes_of(candles: list[Candle], points: list[TurningPoint]) -> list[SwingExtreme]:

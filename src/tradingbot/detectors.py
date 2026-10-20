@@ -329,7 +329,8 @@ class Swing:
         self.extremes: list[SwingExtreme] = []
         """Every extreme read so far with its span; the last one is still standing."""
         self._latest: int | None = None
-        """Start time of the latest candle this side has been read on."""
+        """Start time of the latest candle `update` has been given: the candle before the
+        one being read, until this one has been."""
 
     def _start_of(self, candle: Candle) -> float:
         return candle.low if self.kind is Kind.TOP else candle.high
@@ -359,23 +360,27 @@ class Swing:
             if self._extends(self._extreme_of(candle), self._extreme_of(extreme)):
                 extreme = candle
         self.start = self._start_of(candles[start])
-        self._stand(extreme, read_from=candles[-1].time)
+        self._set_extreme(extreme, read_from=candles[-1].time)
         self.armed = True
 
     def update(self, candle: Candle) -> None:
-        """Extend the swing by the latest candle: a new swing low restarts the extreme at
-        this candle and arms; a new extreme arms."""
-        if self.start is None or self.extreme is None:
-            return
-        if self._extends(self.start, self._start_of(candle)):
-            self.start = self._start_of(candle)
-            self._stand(candle, read_from=candle.time)
-            self.armed = True
-        elif self._extends(self._extreme_of(candle), self._extreme_of(self.extreme)):
-            self._stand(candle, read_from=candle.time)
-            self.armed = True
+        """Extend the swing by the latest candle, after any `reset` on it: a new swing low
+        restarts the extreme at this candle and arms; a new extreme arms."""
+        if self.start is not None and self.extreme is not None:
+            if self._extends(self.start, self._start_of(candle)):
+                self.start = self._start_of(candle)
+                self._set_extreme(candle, read_from=candle.time)
+                self.armed = True
+            elif self._extends(self._extreme_of(candle), self._extreme_of(self.extreme)):
+                self._set_extreme(candle, read_from=candle.time)
+                self.armed = True
+        self._latest = candle.time
 
-    def _stand(self, candle: Candle, read_from: int) -> None:
+    def disarm(self) -> None:
+        """A mark was placed: no mark until the next new extreme."""
+        self.armed = False
+
+    def _set_extreme(self, candle: Candle, read_from: int) -> None:
         """Make `candle` hold the extreme, read from `read_from` on. The extreme standing
         until now was last read on the previous candle; a recompute that lands on the
         candle already holding it changes nothing."""
@@ -387,10 +392,6 @@ class Swing:
         self.extremes.append(
             SwingExtreme(self.kind, self._extreme_of(candle), candle.time, read_from, None)
         )
-
-    def read_on(self, time: int) -> None:
-        """Note that the side has been read on the candle starting at `time`."""
-        self._latest = time
 
     def reached(self) -> bool:
         """Whether the swing has reached the reversal size: `extreme >= swing low x 1.08`
@@ -451,16 +452,13 @@ class DetectorThree:
         self._up.update(latest)
         self._down.update(latest)
         top_due, bottom_due = self._up.due(latest), self._down.due(latest)
-        kind: Kind | None = None
         if top_due and (not bottom_due or self._up.size() > self._down.size()):
-            self._up.armed = False
-            kind = Kind.TOP
-        elif bottom_due and (not top_due or self._down.size() > self._up.size()):
-            self._down.armed = False
-            kind = Kind.BOTTOM
-        self._up.read_on(latest.time)
-        self._down.read_on(latest.time)
-        return kind
+            self._up.disarm()
+            return Kind.TOP
+        if bottom_due and (not top_due or self._down.size() > self._up.size()):
+            self._down.disarm()
+            return Kind.BOTTOM
+        return None
 
     def levels(self, points: Sequence[TurningPoint]) -> list[Level]:
         return []
