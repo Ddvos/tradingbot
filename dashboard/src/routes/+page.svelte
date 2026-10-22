@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import CandleChart from '#lib/CandleChart.svelte';
+	import ScoreTable, { type Cell, type Row } from '#lib/ScoreTable.svelte';
 	import {
 		DETECTORS,
 		fetchCandles,
@@ -13,6 +14,10 @@
 		type Replay,
 		type Score,
 		type StrategyScore,
+		type Backtest,
+		type CostModelScore,
+		type Era,
+		type TradeGroup,
 		type Timeframe,
 		type TurningPoint
 	} from '#lib/api.ts';
@@ -208,12 +213,6 @@
 	const utc = (seconds: number) => new Date(seconds * 1000).toISOString().slice(0, 16) + 'Z';
 	const percent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
 	const signed = (candles: number) => (candles > 0 ? `+${candles}` : `${candles}`);
-	/** False marks per hit as the batch command prints them: n/a when marks found no hit. */
-	const perHit = (score: Score) =>
-		score.marks > 0 && score.hits === 0
-			? 'n/a (no hits)'
-			: `${score.false_marks_per_hit.toFixed(1)} per hit`;
-
 	/** A growth as the batch command prints it: three significant figures after a times sign. */
 	const growth = (value: number | null) =>
 		value === null
@@ -226,44 +225,239 @@
 						? `×${value.toFixed(2)}`
 						: `×${parseFloat(value.toPrecision(3))}`;
 	const pct = (value: number | null) => (value === null ? 'n/a' : `${value.toFixed(1)}%`);
-	const usd = (value: number) =>
-		`${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
+	const money = (value: number) =>
+		value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 	const signedPct = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 	const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-	/** A strategy score on one line, as the batch command prints an era: the money numbers,
-	 * then each group's count and mean result, opened on → closed on. */
-	function describeStrategy(score: StrategyScore): string {
-		if (score.growth === null) return 'no candles';
-		const groups = score.groups
-			.map(
-				(g) =>
-					`${g.opened_on_hit ? 'hit' : 'false'}→${g.closed_on_hit ? 'hit' : 'false'} ${g.trades}` +
-					(g.mean === null ? '' : ` (${signedPct(g.mean)})`)
+	/** The columns of every score table: the eras, then the whole period last. */
+	const columns = (eras: { era: Era }[]) => [...eras.map((e) => e.era.name), 'whole period'];
+
+	/** The detector's score as rows, one cell per era and one for the period. The hit rate
+	 * reads green at or above the 80% bar of ADR-0005 and red below it. */
+	function detectorRows(score: Score): Row[] {
+		const scores = [...score.eras.map((e) => e.score), score];
+		const row = (
+			label: string,
+			title: string,
+			text: (s: Score) => string,
+			tone?: (s: Score) => Cell['tone']
+		): Row => ({ label, title, cells: scores.map((s) => ({ text: text(s), tone: tone?.(s) })) });
+		return [
+			row(
+				'turning points',
+				'Tops and bottoms found in hindsight: the extreme before the market moved at least 8% the other way.',
+				(s) => String(s.turning_points)
+			),
+			row('marks', "The detector's claims, at most one per candle.", (s) => String(s.marks)),
+			row(
+				'hit rate',
+				'Hits over turning points. The bar: at least 80% in every era (ADR-0005).',
+				(s) => percent(s.hit_rate),
+				(s) => (s.turning_points === 0 ? undefined : s.hit_rate >= 0.8 ? 'above' : 'below')
+			),
+			row('false-mark rate', 'False marks over marks.', (s) => percent(s.false_mark_rate)),
+			row(
+				'false marks per hit',
+				'False marks over hits; reported, no bar (ADR-0007).',
+				(s) => (s.marks > 0 && s.hits === 0 ? 'n/a' : s.false_marks_per_hit.toFixed(1))
+			),
+			row(
+				'median timing',
+				'Hourly candles a hit is early (negative) or late (positive) relative to its turning point.',
+				(s) => (s.median_timing === null ? 'no hits' : `${signed(s.median_timing)} candles`)
+			),
+			row(
+				'median give-up',
+				"Percent from the turning point's extreme to the hit's close.",
+				(s) => (s.median_give_up === null ? 'no hits' : `${s.median_give_up.toFixed(2)}%`)
 			)
-			.join(', ');
-		const halt =
-			score.halt_at === null
-				? 'never'
-				: `first ${utc(score.halt_at)}, ${plural(score.halt_episodes, 'episode')}`;
-		return (
-			`growth ${growth(score.growth)} (benchmark ${growth(score.benchmark_growth)}), ` +
-			`worst drawdown ${pct(score.worst_drawdown)} (benchmark ${pct(score.benchmark_worst_drawdown)}), ` +
-			`${plural(score.trades, 'trade')}, fees ${usd(score.fees)}, funding ${usd(score.funding)}, ` +
-			`long ${percent(score.share_long)}, ${groups}, 20% halt ${halt}`
-		);
+		];
 	}
 
-	function describe(score: Score): string {
-		const timing =
-			score.median_timing === null
-				? 'no hits'
-				: `median timing ${signed(score.median_timing)} candles, median give-up ${score.median_give_up?.toFixed(2)}%`;
-		return (
-			`${score.turning_points} turning points, ${score.marks} marks, ` +
-			`hit rate ${percent(score.hit_rate)}, false-mark rate ${percent(score.false_mark_rate)}, ` +
-			`${perHit(score)}, ${timing}`
+	/** Green when the span's growth is at least the benchmark's, red below: the bar of
+	 * ADR-0008, judged per era under the perpetual. */
+	const vsBenchmark = (s: StrategyScore): Cell['tone'] =>
+		s.growth === null || s.benchmark_growth === null
+			? undefined
+			: s.growth >= s.benchmark_growth
+				? 'above'
+				: 'below';
+
+	/** A strategy's score under one cost model as rows. Growth reads green at or above the
+	 * benchmark's and red below it: the bar of ADR-0008, judged per era under the perpetual. */
+	function strategyRows(score: StrategyScore): Row[] {
+		const scores = [...score.eras.map((e) => e.score), score];
+		const row = (
+			label: string,
+			title: string,
+			text: (s: StrategyScore) => string,
+			options: { tone?: (s: StrategyScore) => Cell['tone']; group?: boolean } = {}
+		): Row => ({
+			label,
+			title,
+			group: options.group,
+			cells: scores.map((s) => ({ text: text(s), tone: options.tone?.(s) }))
+		});
+		const outcome = (hit: boolean) => (hit ? 'hit' : 'false');
+		const groupCell = (s: StrategyScore, i: number) => {
+			const g = s.groups[i];
+			return g === undefined || g.trades === 0 || g.mean === null
+				? '0'
+				: `${g.trades} · ${signedPct(g.mean)}`;
+		};
+		const groupRow = (g: TradeGroup, i: number) =>
+			row(
+				`${outcome(g.opened_on_hit)} → ${outcome(g.closed_on_hit)}`,
+				`Trades opened on a ${g.opened_on_hit ? 'hit' : 'false mark'} and closed on a ${g.closed_on_hit ? 'hit' : 'false mark'}: how many, and their mean result in percent of the account's value at entry.`,
+				(s) => groupCell(s, i),
+				{ group: i === 0 }
+			);
+		return [
+			row(
+				'growth',
+				"The account's value at the period's last close over its value before the period. The bar: at least the benchmark's in every era under the perpetual cost model (ADR-0008).",
+				(s) => growth(s.growth),
+				{ tone: vsBenchmark }
+			),
+			row(
+				'benchmark growth',
+				'Buying Bitcoin once at the first candle of the scoring period with one spot fill, and holding.',
+				(s) => growth(s.benchmark_growth)
+			),
+			row(
+				'worst drawdown',
+				"The largest fall of the account's value from an earlier peak within the period, in percent of that peak.",
+				(s) => pct(s.worst_drawdown)
+			),
+			row('benchmark worst drawdown', 'The same, for the benchmark.', (s) =>
+				pct(s.benchmark_worst_drawdown)
+			),
+			row('trades', 'Round trips opened in the period.', (s) => String(s.trades), { group: true }),
+			row('fees (USD)', 'Taker fees paid on every fill.', (s) => money(s.fees)),
+			row('funding (USD)', 'Funding paid at every hourly close while long; none under spot.', (s) =>
+				money(s.funding)
+			),
+			row(
+				'time long',
+				"The share of the period's candles whose close found the account long.",
+				(s) => percent(s.share_long)
+			),
+			...score.groups.map(groupRow),
+			row(
+				'20% halt, first',
+				'The day a 20% drawdown halt would first have fired; reported, never applied.',
+				(s) => (s.halt_at === null ? 'never' : utc(s.halt_at).slice(0, 10)),
+				{ group: true }
+			),
+			row(
+				'20% halt, episodes',
+				'How many separate times the halt would have fired; a new episode needs a new peak first.',
+				(s) => String(s.halt_episodes)
+			)
+		];
+	}
+
+	const day = (seconds: number) => utc(seconds).slice(0, 10);
+	/** Dollars as a person reads them: whole dollars from 100 up, cents below. */
+	const dollars = (value: number) =>
+		value >= 100
+			? value.toLocaleString('en-US', { maximumFractionDigits: 0 })
+			: value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	/** A growth as the change it is: ×0.82 is −18%, ×2.43 is +143%. */
+	const change = (growth: number | null) =>
+		growth === null
+			? 'n/a'
+			: `${growth >= 1 ? '+' : '−'}${Math.abs((growth - 1) * 100).toFixed(0)}%`;
+	/** The value of a series at the last hourly close before `end`; null when there is none. */
+	function valueBefore(times: number[], values: number[], end: number): number | null {
+		let low = 0;
+		let high = times.length;
+		while (low < high) {
+			const mid = (low + high) >> 1;
+			if (times[mid] < end) low = mid + 1;
+			else high = mid;
+		}
+		return low === 0 ? null : values[low - 1];
+	}
+	/** Whether the detector's hit rate is at least 80% in every era (ADR-0005). */
+	const detectorPasses = (score: Score) =>
+		score.eras.length > 0 && score.eras.every((e) => e.score.hit_rate >= 0.8);
+	const giveUp = (score: Score) =>
+		score.median_give_up === null ? '' : `, its hits a median ${score.median_give_up.toFixed(2)}% from the extreme`;
+
+	/** What the 500 USD became: the account under each cost model and the benchmark at the
+	 * last hourly close of every era and of the period, with the change over that span, then
+	 * the trades and what they cost. The short view; the full tables sit behind it. */
+	function summaryRows(backtest: Backtest): Row[] {
+		const { times, benchmark, accounts } = backtest.values;
+		const spans = (score: StrategyScore) => [
+			...score.eras.map((e) => ({ end: e.era.end, score: e.score })),
+			{ end: Infinity, score }
+		];
+		const money = (values: number[], end: number, growth: number | null) => {
+			const value = valueBefore(times, values, end);
+			return value === null ? 'n/a' : `${dollars(value)} USD · ${change(growth)}`;
+		};
+		const rows: Row[] = perpetualFirst(backtest.scores).map((scored) => ({
+			label: `account, ${scored.model}`,
+			title:
+				`What the 500 USD became under the ${scored.model} cost model at the end of each era and of the period, and the change over that span. ` +
+				(scored.model === 'perpetual'
+					? 'Green: at least what holding gave over the span, the bar of ADR-0008; red: less.'
+					: 'Reported next to the perpetual; the bar is not judged under spot.'),
+			cells: spans(scored.score).map(({ end, score }) => ({
+				text: money(accounts[scored.model], end, score.growth),
+				tone: vsBenchmark(score)
+			}))
+		}));
+		const first = backtest.scores[0].score;
+		rows.push({
+			label: 'holding Bitcoin instead',
+			title:
+				'The benchmark: 500 USD of Bitcoin bought at the first candle of the scoring period with one spot fill and held.',
+			cells: spans(first).map(({ end, score }) => ({
+				text: money(benchmark, end, score.benchmark_growth)
+			}))
+		});
+		rows.push({
+			label: 'trades',
+			title: 'Round trips opened in the span.',
+			cells: spans(first).map(({ score }) => ({ text: String(score.trades) })),
+			group: true
+		});
+		const perpetual = backtest.scores.find((s) => s.model === 'perpetual');
+		if (perpetual !== undefined) {
+			rows.push({
+				label: 'fees and funding, perpetual',
+				title: 'What those trades cost under the perpetual cost model, in USD.',
+				cells: spans(perpetual.score).map(({ score }) => ({
+					text: `${dollars(score.fees + score.funding)} USD`
+				}))
+			});
+		}
+		return rows;
+	}
+
+	/** The perpetual's table first, since the bar is judged under it. */
+	const perpetualFirst = (scores: CostModelScore[]) => [
+		...scores.filter((s) => s.model === 'perpetual'),
+		...scores.filter((s) => s.model !== 'perpetual')
+	];
+
+	/** The bar of ADR-0008 as the batch command prints it: pass, or fail with the eras that
+	 * fell short under the perpetual cost model. */
+	function verdict(backtest: Backtest): string {
+		if (backtest.passes) return 'pass';
+		const perpetual = backtest.scores.find((s) => s.model === 'perpetual');
+		const short = (perpetual?.score.eras ?? []).filter(
+			(e) =>
+				e.score.growth !== null &&
+				e.score.benchmark_growth !== null &&
+				e.score.growth < e.score.benchmark_growth
 		);
+		const detail = short.map((e) => e.era.name).join(', ');
+		return detail === '' ? 'fail' : `fail: below holding in ${detail}`;
 	}
 </script>
 
@@ -382,32 +576,57 @@
 	</header>
 	{#if mode === 'replay' && replay && total > 0}
 		<div class="score">
-			<p>
-				<strong>{replay.detector}</strong> on {replay.timeframe} candles over the scoring period:
-				{describe(replay.score)}
+			<p class="summary">
+				<strong>{replay.detector}</strong> found {replay.score.hits} of {replay.score.turning_points}
+				turning points ({percent(replay.score.hit_rate)}; per era {replay.score.eras
+					.map((e) => percent(e.score.hit_rate))
+					.join(', ')}) and placed {replay.score.false_marks_per_hit.toFixed(1)} false marks for every
+				hit{giveUp(replay.score)}. <strong>Bar (ADR-0005)</strong>, at least 80% in every era:
+				<strong class={detectorPasses(replay.score) ? 'pass' : 'fail'}
+					>{detectorPasses(replay.score) ? 'pass' : 'fail'}</strong
+				>
 			</p>
-			<ul class="eras">
-				{#each replay.score.eras as era (era.era.name)}
-					<li><strong>{era.era.name}</strong>: {describe(era.score)}</li>
-				{/each}
-			</ul>
 			{#if replay.backtest}
-				{#each replay.backtest.scores as scored (scored.model)}
-					<p>
-						<strong>{replay.backtest.strategy}</strong> under the {scored.model} cost model, the
-						account from {utc(replay.backtest.scored_from)}: {describeStrategy(scored.score)}
-					</p>
-					<ul class="eras">
-						{#each scored.score.eras as era (era.era.name)}
-							<li><strong>{era.era.name}</strong>: {describeStrategy(era.score)}</li>
-						{/each}
-					</ul>
-				{/each}
-				<p>
-					<strong>bar (ADR-0008)</strong>: growth at least the benchmark's in every era under the
-					perpetual cost model: {replay.backtest.passes ? 'pass' : 'fail'}
+				<p class="summary">
+					<strong>{replay.backtest.strategy}</strong> on {replay.backtest.detector}: 500 USD from
+					{day(replay.backtest.scored_from)} to {day(
+						replay.backtest.values.times[replay.backtest.values.times.length - 1]
+					)}, where the stored development data ends (later candles are kept for out-of-sample
+					checks). <strong>Bar (ADR-0008)</strong>, at least what holding gave in every era under the
+					perpetual cost model:
+					<strong class={replay.backtest.passes ? 'pass' : 'fail'}>{verdict(replay.backtest)}</strong>
 				</p>
+				<div class="tables">
+					<ScoreTable
+						caption="what the 500 USD became"
+						columns={columns(replay.backtest.scores[0].score.eras)}
+						rows={summaryRows(replay.backtest)}
+					/>
+				</div>
 			{/if}
+			<details>
+				<summary>every number, as the batch commands print them</summary>
+				<div class="tables">
+					<ScoreTable
+						caption="{replay.detector} on {replay.timeframe} candles over the scoring period"
+						columns={columns(replay.score.eras)}
+						rows={detectorRows(replay.score)}
+					/>
+				</div>
+				{#if replay.backtest}
+					<div class="tables">
+						{#each perpetualFirst(replay.backtest.scores) as scored (scored.model)}
+							<ScoreTable
+								caption="under the {scored.model} cost model{scored.model === 'perpetual'
+									? ' (the bar)'
+									: ' (reported, no bar)'}"
+								columns={columns(scored.score.eras)}
+								rows={strategyRows(scored.score)}
+							/>
+						{/each}
+					</div>
+				{/if}
+			</details>
 		</div>
 	{/if}
 	{#if mode === 'hindsight'}
@@ -522,12 +741,31 @@
 	.score {
 		margin-bottom: 12px;
 	}
-	.score p {
-		margin: 0;
+	.tables {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 32px;
+		align-items: flex-start;
 	}
-	.eras {
-		margin: 4px 0 0;
-		padding-left: 20px;
+	.summary {
+		margin: 0 0 6px;
+		color: #333;
+	}
+	details {
+		margin-top: 6px;
+	}
+	summary {
+		cursor: pointer;
+		color: #666;
+	}
+	details .tables {
+		margin-top: 8px;
+	}
+	.pass {
+		color: #2e7d32;
+	}
+	.fail {
+		color: #c62828;
 	}
 	.legend {
 		margin-top: 8px;
