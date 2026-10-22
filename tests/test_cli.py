@@ -135,9 +135,7 @@ def test_replay_prints_the_floor_score_and_writes_the_chart_data(
         "swing_extremes",
         "marks",
         "score",
-        "backtest",
     }
-    assert data["backtest"] is None, "no strategy was asked for"
     assert [era["era"]["name"] for era in data["score"]["eras"]] == [
         "2016-2018",
         "2019-2021",

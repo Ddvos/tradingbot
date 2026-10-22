@@ -132,11 +132,12 @@ def read_development_candles(db: Path, detector: Detector) -> list[Candle]:
     return candles
 
 
-def write_chart_data(result: ReplayResult, out: Path) -> None:
-    from tradingbot.api import ReplayOut
+def write_chart_data(result: ReplayResult | BacktestResult, out: Path) -> None:
+    from tradingbot.api import BacktestOut, ReplayOut
 
+    chart = BacktestOut.of(result) if isinstance(result, BacktestResult) else ReplayOut.of(result)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(ReplayOut.of(result).model_dump_json())
+    out.write_text(chart.model_dump_json())
     print(f"Wrote the chart data to {out}.")
 
 
@@ -171,19 +172,17 @@ def run_re_score(
     strategy = None if strategy_name is None else strategy_named(strategy_name)
     try:
         if strategy is None:
-            scored = re_score.re_score(re_score.RecordedRun.read(recorded), detector, recorded)
-            rescored_backtest = None
+            scored = re_score.re_score(re_score.RecordedRun.read(recorded), detector)
+            strategy_scored = None
         else:
             recorded_backtest = recorded_backtest or db.parent / f"backtest-{strategy.name}.json"
-            rescored_backtest = re_score.re_score_backtest(
+            strategy_scored = re_score.re_score_backtest(
                 re_score.RecordedRun.read(recorded),
                 re_score.RecordedBacktest.read(recorded_backtest),
                 detector,
                 strategy,
-                recorded,
-                recorded_backtest,
             )
-            scored = rescored_backtest.replay
+            scored = strategy_scored.replay
     except re_score.Refused as refused:
         sys.exit(str(refused))
     print(
@@ -191,13 +190,13 @@ def run_re_score(
         f"time to the recorded run in {recorded}."
     )
     print(report(scored.result, "over the scoring period"))
-    if rescored_backtest is not None:
+    if strategy_scored is not None:
         print(
-            f"Re-scored {rescored_backtest.result.strategy} under {COST_MODELS_ADR}: "
-            f"{rescored_backtest.fills} fills, identical in number and time to the recorded "
+            f"Re-scored {strategy_scored.result.strategy} under {COST_MODELS_ADR}: "
+            f"{strategy_scored.fills} fills, identical in number and time to the recorded "
             f"backtest in {recorded_backtest}."
         )
-        print(report_backtest(rescored_backtest.result, scored.result))
+        print(report_backtest(strategy_scored.result, scored.result))
 
 
 def run_backtest(db: Path, name: str, recorded: Path | None, out: Path | None) -> None:
@@ -221,7 +220,7 @@ def run_backtest(db: Path, name: str, recorded: Path | None, out: Path | None) -
     candles = read_development_candles(db, detector)
     replayed = replay_all(candles, detector)
     try:
-        re_score.check_marks(replayed, re_score.RecordedRun.read(recorded), detector, recorded)
+        re_score.check_marks(replayed, re_score.RecordedRun.read(recorded), detector)
     except re_score.Refused as refused:
         sys.exit(str(refused))
     result = score_replayed(replayed, score_from=SCORING_START)
@@ -232,11 +231,7 @@ def run_backtest(db: Path, name: str, recorded: Path | None, out: Path | None) -
         )
     tested = backtest(result, strategy)
     print(report_backtest(tested, result))
-    from tradingbot.api import BacktestOut
-
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(BacktestOut.of(tested).model_dump_json())
-    print(f"Wrote the chart data to {out}.")
+    write_chart_data(tested, out)
 
 
 def run_check_hourly(db: Path) -> None:

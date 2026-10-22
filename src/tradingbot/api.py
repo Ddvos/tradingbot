@@ -12,8 +12,8 @@ a detector, on the candles of the detector's timeframe, and answers every
 candle it read, the levels and the swing extremes it read, every mark with its
 outcome where the scoring period scored it, and the score over the scoring
 period, per era. With `&strategy=...` it also walks that strategy over the
-replay and answers its fills and its score under both cost models (ADR-0008);
-without, nothing changes.
+replay and answers, under `backtest`, its fills and its score under both cost
+models (ADR-0008); without, the answer is unchanged and has no `backtest`.
 
 Every route reads through `read_development`, so nothing past the
 out-of-sample boundary is ever served.
@@ -32,8 +32,8 @@ from pydantic import BaseModel
 from tradingbot.backtest import (
     BacktestResult,
     CostModel,
+    CostModelScore,
     Fill,
-    ModelScore,
     ValueSeries,
     backtest,
 )
@@ -70,7 +70,7 @@ class BacktestOut(BaseModel):
     fills: list[Fill]
     values: ValueSeries
     """The account's value at every hourly close under each cost model, and the benchmark's."""
-    scores: list[ModelScore]
+    scores: list[CostModelScore]
     passes: bool
 
     @classmethod
@@ -100,11 +100,9 @@ class ReplayOut(BaseModel):
     swing_extremes: list[SwingExtreme]
     marks: list[MarkOutcome]
     score: Score
-    backtest: BacktestOut | None = None
-    """The strategy's fills and score when one was asked for; None otherwise."""
 
     @classmethod
-    def of(cls, result: ReplayResult, backtest: BacktestResult | None = None) -> ReplayOut:
+    def of(cls, result: ReplayResult) -> ReplayOut:
         return cls(
             detector=result.detector,
             timeframe=result.timeframe.value,
@@ -115,8 +113,17 @@ class ReplayOut(BaseModel):
             swing_extremes=result.swing_extremes,
             marks=result.marks,
             score=result.score,
-            backtest=None if backtest is None else BacktestOut.of(backtest),
         )
+
+
+class BacktestedOut(ReplayOut):
+    """A replay with a strategy walked over it: what `/replay` answers with a strategy."""
+
+    backtest: BacktestOut
+
+    @classmethod
+    def with_backtest(cls, result: ReplayResult, tested: BacktestResult) -> BacktestedOut:
+        return cls(**dict(ReplayOut.of(result)), backtest=BacktestOut.of(tested))
 
 
 def parse_time(value: str) -> int:
@@ -207,7 +214,7 @@ def create_app(db_path: str | Path) -> FastAPI:
         return TurningPointsOut(timeframe=timeframe.value, turning_points=placed)
 
     @app.get("/replay")
-    def replay(detector: str, strategy: str | None = None) -> ReplayOut:
+    def replay(detector: str, strategy: str | None = None) -> BacktestedOut | ReplayOut:
         build = DETECTORS.get(detector)
         if build is None:
             known = ", ".join(DETECTORS)
@@ -219,7 +226,8 @@ def create_app(db_path: str | Path) -> FastAPI:
         instance = build()
         result = run(read(instance.timeframe), instance, score_from=SCORING_START)
         if build_strategy is None or not result.scored_candles:
+            # No strategy asked for, or no candle for the account to start on.
             return ReplayOut.of(result)
-        return ReplayOut.of(result, backtest(result, build_strategy()))
+        return BacktestedOut.with_backtest(result, backtest(result, build_strategy()))
 
     return app

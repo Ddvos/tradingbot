@@ -45,6 +45,8 @@ class RecordedRun:
     """Every candle the run read, within the development period."""
     marks: list[tuple[Kind, int]]
     """Kind and time of every mark the run placed, oldest first."""
+    path: Path
+    """The file it was read from, named in the messages."""
 
     @classmethod
     def read(cls, path: Path) -> RecordedRun:
@@ -54,6 +56,7 @@ class RecordedRun:
             data["detector"],
             [c for c in (Candle(**row) for row in data["candles"]) if c.time <= last],
             [(Kind(m["kind"]), m["time"]) for m in data["marks"]],
+            path,
         )
 
 
@@ -75,10 +78,10 @@ def first_difference(
     return longer[min(len(fresh), len(recorded))][1]
 
 
-def check_marks(replayed: Replayed, recorded: RecordedRun, detector: Detector, path: Path) -> None:
+def check_marks(replayed: Replayed, recorded: RecordedRun, detector: Detector) -> None:
     """Raise `Refused` unless the replay's marks are identical in number and time to the
-    recorded run's, or when the file records another detector's run; `path` names the
-    file in the messages."""
+    recorded run's, or when the file records another detector's run."""
+    path = recorded.path
     if recorded.detector != detector.name:
         raise Refused(f"{path} records a run of {recorded.detector!r}, not of {detector.name!r}.")
     fresh = [(m.kind, m.time) for m in replayed.marks]
@@ -91,15 +94,15 @@ def check_marks(replayed: Replayed, recorded: RecordedRun, detector: Detector, p
         )
 
 
-def re_score(recorded: RecordedRun, detector: Detector, path: Path) -> ReScored:
+def re_score(recorded: RecordedRun, detector: Detector) -> ReScored:
     """Replay the recorded run's candles through the detector and score them over the
-    scoring period; `path` names the file in the messages.
+    scoring period.
 
     Raises `Refused` when the file records another detector's run or when the
     marks are not identical to the recorded ones.
     """
     replayed = replay_all(recorded.candles, detector)
-    check_marks(replayed, recorded, detector, path)
+    check_marks(replayed, recorded, detector)
     return ReScored(len(replayed.marks), score_replayed(replayed, score_from=SCORING_START))
 
 
@@ -109,6 +112,8 @@ class RecordedBacktest:
     strategy: str
     fills: list[tuple[Side, int]]
     """Side and time of every fill the backtest recorded, oldest first."""
+    path: Path
+    """The file it was read from, named in the messages."""
 
     @classmethod
     def read(cls, path: Path) -> RecordedBacktest:
@@ -117,6 +122,7 @@ class RecordedBacktest:
             data["detector"],
             data["strategy"],
             [(Side(f["side"]), f["time"]) for f in data["fills"]],
+            path,
         )
 
 
@@ -134,16 +140,15 @@ def re_score_backtest(
     recorded: RecordedBacktest,
     detector: Detector,
     strategy: Strategy,
-    run_path: Path,
-    path: Path,
 ) -> ReScoredBacktest:
     """Re-score the recorded run, walk the strategy over it again and score that under the
-    current cost models; `run_path` and `path` name the two files in the messages.
+    current cost models.
 
     Raises `Refused` when either file records another detector's or strategy's
     run, when the marks differ from the recorded run's, or when the fills
     differ from the recorded backtest's.
     """
+    path = recorded.path
     if recorded.strategy != strategy.name:
         raise Refused(
             f"{path} records a backtest of {recorded.strategy!r}, not of {strategy.name!r}."
@@ -152,7 +157,7 @@ def re_score_backtest(
         raise Refused(
             f"{path} records a backtest on {recorded.detector!r}, not on {detector.name!r}."
         )
-    scored = re_score(recorded_run, detector, run_path)
+    scored = re_score(recorded_run, detector)
     result = backtest(scored.result, strategy)
     fresh = [(f.side, f.time) for f in result.fills]
     if fresh != recorded.fills:

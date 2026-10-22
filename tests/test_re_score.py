@@ -55,7 +55,7 @@ def test_re_scoring_replays_the_recorded_candles_and_keeps_the_marks(tmp_path: P
     path.write_text(json.dumps(data))
     recorded = RecordedRun.read(path)
 
-    scored = re_score(recorded, FloorDetector(), path)
+    scored = re_score(recorded, FloorDetector())
 
     assert scored.marks == len(recorded.marks) > 0
     assert scored.result.candles == recorded.candles
@@ -69,7 +69,7 @@ the repository root whatever the working directory, so the test skips only when 
 @pytest.mark.skipif(not RECORDED_THREE.exists(), reason=f"{RECORDED_THREE} is not on disk")
 def test_the_recorded_run_of_detector_three_scores_six_and_a_half_false_marks_per_hit() -> None:
     # The development run on #20: 719 hits and 4,698 false marks over the scoring period.
-    scored = re_score(RecordedRun.read(RECORDED_THREE), _named("three"), RECORDED_THREE)
+    scored = re_score(RecordedRun.read(RECORDED_THREE), _named("three"))
 
     assert (scored.result.score.hits, scored.result.score.false_marks) == (719, 4698)
     assert round(scored.result.score.false_marks_per_hit, 1) == 6.5
@@ -80,7 +80,7 @@ def test_re_scoring_refuses_another_detectors_run(tmp_path: Path) -> None:
     path = swing(tmp_path)
 
     with pytest.raises(Refused, match="floor"):
-        re_score(RecordedRun.read(path), _named("one"), path)
+        re_score(RecordedRun.read(path), _named("one"))
 
 
 def _named(name: str):
@@ -138,12 +138,10 @@ def test_re_scoring_a_backtest_reproduces_the_recorded_fills_and_the_score(
         RecordedBacktest.read(recorded_backtest),
         FloorDetector(),
         Flip(),
-        recorded,
-        recorded_backtest,
     )
 
-    assert scored.fills == len(expected["fills"])
-    assert scored.replay.marks == len(expected["fills"]) or scored.replay.marks > 0
+    assert scored.fills == len(expected["fills"]) > 10
+    assert scored.replay.marks == len(json.loads(recorded.read_text())["marks"]) > 0
     assert [s.score.growth for s in scored.result.scores] == [
         s["score"]["growth"] for s in expected["scores"]
     ]
@@ -165,8 +163,6 @@ def test_re_scoring_a_backtest_refuses_when_the_fills_differ(tmp_path: Path) -> 
             RecordedBacktest.read(recorded_backtest),
             FloorDetector(),
             Flip(),
-            recorded,
-            recorded_backtest,
         )
 
     message = str(refused.value)
@@ -189,8 +185,6 @@ def test_re_scoring_a_backtest_refuses_another_strategys_or_detectors_file(tmp_p
             RecordedBacktest.read(recorded_backtest),
             FloorDetector(),
             Flip(),
-            recorded,
-            recorded_backtest,
         )
 
     data["strategy"], data["detector"] = "flip", "one"
@@ -201,8 +195,6 @@ def test_re_scoring_a_backtest_refuses_another_strategys_or_detectors_file(tmp_p
             RecordedBacktest.read(recorded_backtest),
             FloorDetector(),
             Flip(),
-            recorded,
-            recorded_backtest,
         )
 
 
@@ -215,11 +207,11 @@ def test_check_marks_refuses_a_fresh_replay_whose_marks_differ_from_the_recorded
     recorded, _ = floor_flip(tmp_path)
     run_ = RecordedRun.read(recorded)
     replayed = replay_all(run_.candles, FloorDetector())
-    check_marks(replayed, run_, FloorDetector(), recorded)  # identical: nothing happens
+    check_marks(replayed, run_, FloorDetector())  # identical: nothing happens
 
     shorter = replay_all(run_.candles[:-200], FloorDetector())
     with pytest.raises(Refused, match="replay-floor.json"):
-        check_marks(shorter, run_, FloorDetector(), recorded)
+        check_marks(shorter, run_, FloorDetector())
 
 
 RECORDED_FLIP = Path(__file__).resolve().parents[1] / "data" / "backtest-flip.json"
@@ -242,8 +234,6 @@ def test_the_recorded_backtest_of_the_flip_is_reproduced_with_its_score() -> Non
         RecordedBacktest.read(RECORDED_FLIP),
         _named("three"),
         Flip(),
-        RECORDED_THREE,
-        RECORDED_FLIP,
     )
 
     assert scored.fills == 868

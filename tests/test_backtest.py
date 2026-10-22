@@ -11,8 +11,13 @@ from tradingbot.backtest import (
     SLIPPAGE,
     SPOT,
     Account,
+    BacktestResult,
     Side,
+    StrategyScore,
+    TradeGroup,
     backtest,
+    describe_strategy_score,
+    describe_verdict,
     fill_price,
     growth,
     halt,
@@ -167,7 +172,7 @@ SCRIPT = {
 false mark, on a false mark and a hit, on two false marks."""
 
 
-def flip_on_the_zigzag():
+def flip_on_the_zigzag() -> BacktestResult:
     result = run(zigzag(), Scripted(SCRIPT), score_from=SCORING_START)
     assert [(m.time, m.hit) for m in result.marks] == [
         (t, k in (at(4), at(8), at(12), at(24))) for t, k in zip(SCRIPT, SCRIPT, strict=True)
@@ -384,8 +389,6 @@ def test_a_position_still_open_at_the_end_is_a_fill_but_no_trade() -> None:
 
 
 def test_describe_strategy_score_prints_the_period_lines_then_one_line_per_era() -> None:
-    from tradingbot.backtest import describe_strategy_score
-
     bt = flip_on_the_zigzag()
 
     lines = describe_strategy_score(bt.scores[0].score)
@@ -423,8 +426,6 @@ def test_describe_strategy_score_prints_the_period_lines_then_one_line_per_era()
 
 
 def test_describe_strategy_score_prints_the_halt_and_the_big_numbers_readably() -> None:
-    from tradingbot.backtest import StrategyScore, TradeGroup, describe_strategy_score
-
     groups = tuple(
         TradeGroup(o, c, 0, None, None)
         for o, c in ((True, True), (True, False), (False, True), (False, False))
@@ -447,8 +448,6 @@ def test_describe_strategy_score_prints_the_halt_and_the_big_numbers_readably() 
 
 
 def test_describe_verdict_reads_the_bar_of_adr_0008_under_the_perpetual() -> None:
-    from tradingbot.backtest import describe_verdict
-
     bt = flip_on_the_zigzag()
 
     assert describe_verdict(bt) == (
@@ -456,3 +455,38 @@ def test_describe_verdict_reads_the_bar_of_adr_0008_under_the_perpetual() -> Non
         "growth at least the benchmark's in every era under the perpetual cost model: pass "
         "(2022-2024 ×1.28 vs ×0.992)",
     )
+
+
+class AlwaysLong:
+    """A strategy that wants to be long at every ask, whatever the marks say."""
+
+    name = "always-long"
+
+    def desired(
+        self,
+        candles: Sequence[Candle],
+        marks: Sequence[MarkWithExtreme],
+        turning_points: Sequence[TurningPoint],
+        position: Position,
+    ) -> Position:
+        return Position.LONG
+
+
+def test_a_change_of_position_is_placed_only_while_the_latest_mark_is_in_the_scoring_period() -> (
+    None
+):
+    # Scored from hour 10: the marks at hours 4 and 8 are history. The strategy wants long
+    # from its first ask at hour 10, but no order is placed until the bottom mark at hour 12
+    # puts a mark in the scoring period; the buy then fills at hour 13's open.
+    result = run(zigzag(), Scripted(SCRIPT), score_from=at(10))
+
+    bt = backtest(result, AlwaysLong())
+
+    assert [(f.side, f.time, f.mark) for f in bt.fills] == [(Side.BUY, at(13), at(12))]
+    # Scored from the start, the first mark at hour 4 is in the period: the buy fills at 5.
+    assert [
+        f.time
+        for f in backtest(
+            run(zigzag(), Scripted(SCRIPT), score_from=SCORING_START), AlwaysLong()
+        ).fills
+    ] == [at(5)]

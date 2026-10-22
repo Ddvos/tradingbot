@@ -117,8 +117,8 @@ export interface Fill {
 	time: number;
 	/** That open moved 0.05% against the bot. */
 	price: number;
-	/** Time of the mark that caused the order; null when none had been placed yet. */
-	mark: number | null;
+	/** Time of the mark that caused the order: the latest mark at the close the strategy changed its mind on. */
+	mark: number;
 	costs: FillCost[];
 }
 
@@ -158,7 +158,8 @@ export interface EraStrategyScore {
 	score: StrategyScore;
 }
 
-export interface ModelScore {
+export interface CostModelScore {
+	/** The cost model's name: 'spot' or 'perpetual'. */
 	model: string;
 	score: StrategyScore;
 }
@@ -186,7 +187,7 @@ export interface Backtest {
 	cost_models: CostModel[];
 	fills: Fill[];
 	values: ValueSeries;
-	scores: ModelScore[];
+	scores: CostModelScore[];
 	/** The bar of ADR-0008: growth at least the benchmark's in every era under the perpetual. */
 	passes: boolean;
 }
@@ -206,8 +207,8 @@ export interface Replay {
 	swing_extremes: SwingExtreme[];
 	marks: MarkOutcome[];
 	score: Score;
-	/** The strategy's backtest when one was asked for; null otherwise. */
-	backtest: Backtest | null;
+	/** The strategy's backtest when one was asked for; absent otherwise. */
+	backtest?: Backtest;
 }
 
 export const DETECTORS = ['floor', 'one', 'two', 'three'];

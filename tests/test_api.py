@@ -439,7 +439,7 @@ def test_a_replay_with_a_strategy_answers_the_fills_and_the_strategy_score(
 def test_a_replay_without_a_strategy_answers_no_backtest(harness_client: TestClient) -> None:
     body = harness_client.get("/replay", params={"detector": "floor"}).json()
 
-    assert body["backtest"] is None
+    assert "backtest" not in body
 
 
 def test_an_unknown_strategy_is_rejected(harness_client: TestClient) -> None:
