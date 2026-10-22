@@ -7,7 +7,8 @@ builds them the way replay does, over the whole development period so the
 turning-point finder carries the same state, and compares them with the stored
 table over the scoring period: hour by hour on open, high, low, close and
 trades exactly and on volume to within float rounding (the archive's hourly
-volume is the same sum in another order), and turning point by turning point.
+volume is the same sum in another order), and turning point by turning point,
+found on both series at the hindsight route's 8%.
 """
 
 from __future__ import annotations
