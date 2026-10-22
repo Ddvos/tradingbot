@@ -32,8 +32,9 @@
 
 	type Mode = 'hindsight' | 'replay';
 	const SPEEDS = [1, 10, 100, 1000];
-	/** The first stored day and the last development day, the day before the out-of-sample
-	 * boundary of 2025-01-01 (ADR-0009): the limits of the start-date picker. */
+	/** The out-of-sample boundary (ADR-0009): the development period ends the day before. */
+	const BOUNDARY_DAY = '2025-01-01';
+	/** The first stored day and the last development day: the limits of the start-date picker. */
 	const FIRST_DAY = '2013-10-06';
 	const LAST_DAY = '2024-12-31';
 
@@ -216,8 +217,9 @@
 
 	const utc = (seconds: number) => new Date(seconds * 1000).toISOString().slice(0, 16) + 'Z';
 	const percent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
-	/** A reversal size as the batch commands print it: 8%, 16%, 12.5%. */
-	const reversalText = (fraction: number) => `${parseFloat((fraction * 100).toPrecision(4))}%`;
+	/** A reversal size as the batch commands print it (`describe_reversal`, six significant
+	 * figures at most): 8%, 16%, 12.5%. */
+	const reversalText = (fraction: number) => `${parseFloat((fraction * 100).toPrecision(6))}%`;
 	/** The reversal size of the turning points on the chart: the detector's family's in
 	 * Replay, the hindsight route's in Hindsight. */
 	const shownReversal = $derived(
@@ -564,7 +566,7 @@
 				<span class="error">{error}</span>
 			{:else if mode === 'hindsight'}
 				{#if candles.length === 0}
-					No {timeframe} candles in the development period (before 2025-01-01). Import an
+					No {timeframe} candles in the development period (before {BOUNDARY_DAY}). Import an
 					archive that covers it.
 				{:else}
 					{candles.length.toLocaleString()} {timeframe} candles from {utc(candles[0].time)} to {utc(
@@ -573,8 +575,8 @@
 				{/if}
 			{:else if replay}
 				{#if total === 0}
-					No {replay.timeframe} candles in the development period (before 2025-01-01). Import an
-					archive that covers it.
+					No {replay.timeframe} candles in the development period (before {BOUNDARY_DAY}). Import
+					an archive that covers it.
 				{:else}
 					{replay.timeframe} candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
 						? `, ${utc(now)}`

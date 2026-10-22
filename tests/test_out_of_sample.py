@@ -132,3 +132,5 @@ def test_the_log_reads_lines_written_before_slice_10_too() -> None:
 
     assert (entry.detector, entry.strategy) == ("three", None)
     assert entry.line() == old
+    with pytest.raises(ValueError, match="four or five"):
+        LogEntry.parse(old + "\tflip: ...\tone field too many")

@@ -64,8 +64,13 @@ class LogEntry:
 
     @classmethod
     def parse(cls, line: str) -> LogEntry:
-        when, detector, period, score, *rest = line.split("\t")
-        return cls(when, detector, period, score, rest[0] if rest else None)
+        fields = line.split("\t")
+        if len(fields) not in (4, 5):
+            raise ValueError(
+                f"a log line has four or five tab-separated fields, not {len(fields)}: {line!r}"
+            )
+        when, detector, period, score = fields[:4]
+        return cls(when, detector, period, score, fields[4] if len(fields) == 5 else None)
 
 
 def summarize(score: Score, reversal: float) -> str:

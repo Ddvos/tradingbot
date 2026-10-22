@@ -432,3 +432,21 @@ def test_a_detector_is_scored_against_the_turning_points_of_its_own_reversal_siz
     # near it, so it is a false mark, and only the mark at hour 6 is a hit.
     assert [(m.time, m.hit) for m in result.marks] == [(T0 + 2 * H, False), (T0 + 6 * H, True)]
     assert (result.score.turning_points, result.score.hits, result.score.false_marks) == (2, 1, 1)
+
+
+def test_the_era_split_follows_the_turning_points_of_the_detectors_size() -> None:
+    # The same closes, laid across the turn of 2021 into 2022: the 16% top at hour 0 falls in
+    # 2019-2021 and the 16% bottom at hour 6 in 2022-2024. A hit belongs to the era of its
+    # turning point, a false mark to the era of its mark (ADR-0005), at any size.
+    start = 1_640_995_200 - 3 * H  # 2021-12-31T21:00:00Z
+    closes = [100.0, 95.0, 90.0, 95.0, 100.0, 90.0, 80.0, 90.0, 100.0]
+    candles = [Candle(start + h * H, c, c, c, c, 1.0, 1) for h, c in enumerate(closes)]
+    detector = AtSixteenPercent(bottoms_at={start + 2 * H, start + 6 * H})
+
+    result = run(candles, detector)
+
+    by_era = {e.era.name: e.score for e in result.score.eras}
+    assert (by_era["2019-2021"].turning_points, by_era["2022-2024"].turning_points) == (1, 1)
+    assert (by_era["2019-2021"].hits, by_era["2019-2021"].false_marks) == (0, 1)
+    assert (by_era["2022-2024"].hits, by_era["2022-2024"].false_marks) == (1, 0)
+    assert by_era["2016-2018"].turning_points == 0
