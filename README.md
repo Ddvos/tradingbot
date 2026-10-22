@@ -2,7 +2,7 @@
 
 A bot that finds Bitcoin's turning points on a chart and, once it does that well, trades them with real money on Kraken. The vocabulary is in `GLOSSARY.md`; the decisions are in `docs/adr/`.
 
-Slice 1 put the hourly history of Kraken spot `XBTUSD` in one SQLite file, resampled to 4-hour and daily candles, served by a small API and shown as candlesticks in a dashboard. Slice 2 added the harness that judges a detector before any detector exists: the true tops and bottoms of the history in hindsight, a replay that hands candles to a detector one hour at a time, the floor detector kept for reference, and the score. Slice 3 added detector one, the first candidate, pre-registered in issue #12 and judged by that harness, and the one explicit command that reads past the out-of-sample boundary. Slice 4 added detector two, the second iteration of the same family, pre-registered in issue #16: detector one's rule with levels that expire after 30 days, and the levels drawn on the replay chart. Family one closed on #16. Slice 5 changes the harness by ADR-0004 to ADR-0006 before family two runs: fifteen-minute candles next to the hourly ones, a replay that hands a detector fifteen-minute candles while the turning points stay hourly, tolerance B, a scoring period from 2016 split in three eras, three impossible prints dropped, and the three recorded runs re-scored under the new definitions (issue #19). Slice 6 adds detector three, the first iteration of family two, pre-registered in issue #20: on fifteen-minute candles, a mark on the first candle that stays short of the swing extreme once the swing has reached the reversal size, with the swing extreme drawn on the replay chart. Slice 7 changes the harness by ADR-0007 before family two's out-of-sample check: the false-mark bar is dropped, the score reports false marks per hit for the period and per era, and the four recorded runs are re-scored (issue #27). Slice 8 spends family two's one out-of-sample check on detector three, pre-registered in issue #28: the run's line is in `out-of-sample.log`, and its score and verdict are recorded on that issue. No trading yet.
+Slice 1 put the hourly history of Kraken spot `XBTUSD` in one SQLite file, resampled to 4-hour and daily candles, served by a small API and shown as candlesticks in a dashboard. Slice 2 added the harness that judges a detector before any detector exists: the true tops and bottoms of the history in hindsight, a replay that hands candles to a detector one hour at a time, the floor detector kept for reference, and the score. Slice 3 added detector one, the first candidate, pre-registered in issue #12 and judged by that harness, and the one explicit command that reads past the out-of-sample boundary. Slice 4 added detector two, the second iteration of the same family, pre-registered in issue #16: detector one's rule with levels that expire after 30 days, and the levels drawn on the replay chart. Family one closed on #16. Slice 5 changes the harness by ADR-0004 to ADR-0006 before family two runs: fifteen-minute candles next to the hourly ones, a replay that hands a detector fifteen-minute candles while the turning points stay hourly, tolerance B, a scoring period from 2016 split in three eras, three impossible prints dropped, and the three recorded runs re-scored under the new definitions (issue #19). Slice 6 adds detector three, the first iteration of family two, pre-registered in issue #20: on fifteen-minute candles, a mark on the first candle that stays short of the swing extreme once the swing has reached the reversal size, with the swing extreme drawn on the replay chart. Slice 7 changes the harness by ADR-0007 before family two's out-of-sample check: the false-mark bar is dropped, the score reports false marks per hit for the period and per era, and the four recorded runs are re-scored (issue #27). Slice 8 spends family two's one out-of-sample check on detector three, pre-registered in issue #28: the run's line is in `out-of-sample.log`, and its score and verdict are recorded on that issue. Slice 9 builds the strategy harness of ADR-0008 before any candidate strategy exists: a backtest that walks a strategy over detector three's recorded run with a notional account under two cost models, spot and the perpetual, the strategy score judged against buying and holding, and the flip, the reference strategy that acts on every mark, run once (issue #32). No trading yet.
 
 ## Requirements
 
@@ -60,7 +60,7 @@ uv run tradingbot serve
 
 Serves `GET http://localhost:8000/candles?timeframe=15m|1h|4h|1d&from=...&to=...`. Fifteen-minute and hourly candles come from their own tables; 4-hour and daily candles are resampled from the hourly ones. `from` and `to` are optional, as Unix seconds or ISO 8601 (`2024-01-01T00:00:00Z`), and are widened to whole periods, so a resampled candle is always built from every hour it covers. 4-hour candles start at 00:00, 04:00, ... UTC; daily candles at 00:00 UTC. Interactive docs are at `http://localhost:8000/docs`.
 
-Two more routes serve the harness over the development period: `GET /turning-points?timeframe=15m|1h|4h|1d` answers the turning points, always found on the hourly candles (on 15m they sit on the fifteen-minute candle that holds the extreme, on 4h and 1d on the candle that holds the hour), and `GET /replay?detector=floor` replays the candles of the detector's timeframe through it and answers every candle it read, the turning points, the levels and the swing extremes the detector read with their active spans, every mark with its outcome where the scoring period scored it, and the score over the scoring period, for the period and per era. All three routes stop at the out-of-sample boundary (see below).
+Two more routes serve the harness over the development period: `GET /turning-points?timeframe=15m|1h|4h|1d` answers the turning points, always found on the hourly candles (on 15m they sit on the fifteen-minute candle that holds the extreme, on 4h and 1d on the candle that holds the hour), and `GET /replay?detector=floor` replays the candles of the detector's timeframe through it and answers every candle it read, the turning points, the levels and the swing extremes the detector read with their active spans, every mark with its outcome where the scoring period scored it, and the score over the scoring period, for the period and per era. With `&strategy=flip` it also walks that strategy over the replay and answers, under `backtest`, its fills and its score under both cost models (see "Backtest a strategy" below); without a strategy, `backtest` is null and nothing else changes. All three routes stop at the out-of-sample boundary (see below).
 
 ## Start the dashboard
 
@@ -74,9 +74,11 @@ One page, two modes. It reads from the API, so start that first.
 
 **Replay** hands the candles of the detector's timeframe to the chosen detector (`floor`, `one` and `two` on hourly candles, `three` on fifteen-minute ones) one at a time, from the first stored candle on. Press *Play* to watch candles appear at the chosen speed, *Pause* to stop, *Step* to advance one candle, *Restart* to begin again from the start date, or from nothing without one. There is no way to step backwards. A mark appears on the candle it was placed on, as a grey arrow (down for a top, up for a bottom) while its outcome is still open, and turns green (hit, with its timing in hourly candles) or red (false mark) as soon as no later candle can change it; a mark before the scoring period stays light grey, unscored: two tolerances after the mark and once the earliest candle that can still become a turning point lies beyond the mark's tolerance. Turning points appear as they are confirmed. The levels the detector sees at the latest candle are drawn as orange lines, each from the candle that confirmed its turning point up to the latest candle, and a line disappears when its level expires; the floor reads no levels, so it draws none. Detector three reads no levels but a swing extreme per side, drawn as a purple line from the candle the detector first read it on up to the latest candle, for as long as it stands; the line moves when a new extreme replaces it, and a mark goes on the first candle that stays short of the line once the swing is 8%. The lines under the controls are the detector's score over the scoring period and per era, the same numbers the batch command prints.
 
+**Strategy** (none or `flip`) walks a strategy over the same replay. Its buys and sells are drawn as squares labelled `buy` and `sell` on the candle each order filled on, the candle after the mark that caused it, and the strategy's score under both cost models, for the scoring period and per era, is printed under the detector's, with the bar of ADR-0008 read out; the status line counts the fills shown. The replay itself does not change: the strategy reads the same marks the chart draws. An account-versus-benchmark line is a later slice.
+
 **From** picks a start date, a calendar day in UTC, shared by both modes and kept in the page address (`?from=2021-01-01`), so a reload or a bookmark keeps it; empty means the first stored candle. It moves where you start watching, never what a detector reads. In Hindsight the view runs from that day to the end of the development period. In Replay the detector still replays from the first stored candle (ADR-0005), so its marks, lines and score are those of the recorded run; the replay jumps to the first candle on or after the date, with everything up to that moment shown at once as it stood then, and plays on from there. The counts in the status line (turning points confirmed, marks placed, hits, false, pending, before the scoring period) count from the start date on; the score block does not change. Earlier candles stay loaded and can be reached by dragging the chart left.
 
-The legend under the chart lists only what the mode and the detector can draw: in Hindsight the turning points alone; in Replay also the marks and their colours, the orange level lines when the detector reads levels (`one` and `two`), and the purple swing-extreme line when it reads swing extremes (`three`). The dashboard reads this from the replay's answer, so a new detector gets the right legend without a dashboard change.
+The legend under the chart lists only what the mode and the detector can draw: in Hindsight the turning points alone; in Replay also the marks and their colours, the orange level lines when the detector reads levels (`one` and `two`), the purple swing-extreme line when it reads swing extremes (`three`), and the buy and sell squares only when a strategy is chosen. The dashboard reads this from the replay's answer, so a new detector gets the right legend without a dashboard change.
 
 ## Replay from the command line
 
@@ -110,6 +112,59 @@ uv run tradingbot re-score floor
 ```
 
 ADR-0004 rules that a recorded run is re-scored, never re-run, when the harness changes. The command reads the recorded run's chart data (`replay-<detector>.json` next to the store, or `--recorded`), replays its own candles through the detector, never past the out-of-sample boundary, and refuses to report unless the marks are identical in number and time to the recorded ones. It then prints the score under the current definitions, named by the ADR that last changed them, for the scoring period and per era, in the same shape as `replay`. The three family-one files hold every candle their runs read, three dropped prints included, which is why the marks come out identical although the store no longer holds those prints; detector one's 2017 marks in the zones of the two spurious levels those prints made (3,484 and 4,000) stay in its recorded run and are scored with it.
+
+## Backtest a strategy
+
+```sh
+uv run tradingbot backtest flip
+```
+
+ADR-0008 fixes how a strategy is judged, and this command is the harness (issue #32). It replays the whole development period through detector three, exactly as `replay three` does, and refuses to report unless the marks are identical in number and time to the recorded run in `replay-three.json` next to the store (or `--recorded`), so every backtest runs on the one recorded run and never on a detector that drifted. The account starts flat with a notional 500 USD at the first candle of the scoring period. From that candle on, at the close of every fifteen-minute candle, the strategy is asked for its desired position, long or flat, given the candles so far, the marks so far each with the swing extreme it was measured against, the turning points confirmed so far and its own position; a change of desired position becomes a market order filled at the next candle's open. Marks before the scoring period are history the strategy may read, never acted on. Sizes are all in and not rounded to Kraken's minimum order size.
+
+Two cost models are applied to every run, one account each, and both are reported. A fill is the next candle's open moved 0.05% against the bot (a buy at open × 1.0005, a sell at open × 0.9995) plus the model's fee on the fill's value: 0.80% a fill under spot, with no funding; 0.05% a fill under the perpetual, plus funding of 0.00125% of the position's value (Bitcoin held × the hourly close) at every hourly close while long, always a cost, 11% a year. Under both the position is 1x, the whole account at the fill. The benchmark is one account that buys Bitcoin at the first candle of the scoring period with one spot fill and holds; it is the same under both models. The account is valued at every fifteen-minute close, USD plus Bitcoin at the close; growth of a period is its value at the last close divided by its value at the close before the period began (the starting 500 USD for the first era and for the whole period); the worst drawdown is the largest fall from an earlier peak over the closes of the period, in percent of that peak.
+
+The strategy score, for the scoring period and per era under each cost model: growth next to the benchmark's, the worst drawdown next to the benchmark's, the number of trades (round trips opened in the period), the fees and funding paid in USD, the share of fifteen-minute candles spent long, the result per trade after both fills as a percentage of the account's value at entry, mean and median, grouped by the outcome of the mark that opened the trade and the mark that closed it (`hit→hit`, `hit→false`, `false→hit`, `false→false`, opened on → closed on, with the count of each), and whether a 20% drawdown halt would have fired: the first close it would have, and the number of separate episodes, a new episode needing a new peak first. The halt is reported, never applied. The verdict reads the bar of ADR-0008: growth at least the benchmark's in every era under the perpetual cost model; the spot column carries no bar.
+
+The chart data goes to `backtest-<strategy>.json` next to the store, or to `--out`, and an existing file is never overwritten: the detector and the strategy, every fill (the mark that caused it, the order's side, the fill's candle, price, and the size, fee and account value after the fill under each cost model), the account's value at every hourly close under each cost model with the benchmark's at the same closes, both cost models' numbers, and the score. Re-score a recorded backtest with `uv run tradingbot re-score three --strategy flip`: it re-scores the recorded run as above, walks the strategy over it again, refuses unless the fills are identical in number and time to those in `backtest-<strategy>.json` next to the store (or `--recorded-backtest`), and prints both scores, the strategy's under the current cost models named by the ADR that last fixed them.
+
+One strategy exists: `flip`, the reference of ADR-0008, which is never a candidate and sets no bar: flat at the start, long on a bottom mark when flat, flat on a top mark when long, a mark of the kind the position already answers does nothing, nothing else. It gives the raw price of acting on every mark in money, the number every strategy family one iteration starts from. This is its reference score, from the one run recorded on issue #32 on 22 October 2026:
+
+```
+Backtested flip on three over 319495 candles from 2013-10-06T21:30:00Z to 2024-10-18T23:45:00Z, the account from 2016-01-01T04:15:00Z: 303109 candles, 868 fills.
+  under the spot cost model
+    growth           ×0.00174  (benchmark ×156)
+    worst drawdown   99.8%  (benchmark 84.0%)
+    trades           434
+    fees             422.15 USD
+    funding          0.00 USD
+    time long        36.8%
+    hit→hit          21 trades, mean +3.70%, median +3.27%
+    hit→false        85 trades, mean +2.69%, median +3.54%
+    false→hit        54 trades, mean -3.60%, median -2.15%
+    false→false      274 trades, mean -1.15%, median +0.02%
+    20% halt         first 2016-06-22T22:30:00Z, 1 episode
+    2016-2018        growth ×0.0399 (benchmark ×8.43), worst drawdown 96.6% (benchmark 84.0%), 195 trades, fees 391.57 USD, funding 0.00 USD, long 27.4%, hit→hit 12 (+5.11%), hit→false 37 (+2.87%), false→hit 26 (-4.02%), false→false 120 (-1.55%), 20% halt first 2016-06-22T22:30:00Z, 1 episode
+    2019-2021        growth ×0.203 (benchmark ×12.5), worst drawdown 83.2% (benchmark 71.1%), 175 trades, fees 28.79 USD, funding 0.00 USD, long 43.2%, hit→hit 9 (+1.81%), hit→false 39 (+1.88%), false→hit 21 (-1.94%), false→false 106 (-0.49%), 20% halt first 2019-07-14T16:15:00Z, 1 episode
+    2022-2024        growth ×0.215 (benchmark ×1.48), worst drawdown 81.0% (benchmark 67.5%), 64 trades, fees 1.78 USD, funding 0.00 USD, long 39.6%, hit→hit 0, hit→false 9 (+5.43%), false→hit 7 (-7.05%), false→false 48 (-1.59%), 20% halt first 2022-01-21T21:45:00Z, 1 episode
+  under the perpetual cost model
+    growth           ×0.82  (benchmark ×156)
+    worst drawdown   60.9%  (benchmark 84.0%)
+    trades           434
+    fees             198.42 USD
+    funding          169.99 USD
+    time long        36.8%
+    hit→hit          21 trades, mean +4.45%, median +4.05%
+    hit→false        85 trades, mean +3.42%, median +4.32%
+    false→hit        54 trades, mean -2.97%, median -1.45%
+    false→false      274 trades, mean -0.49%, median +0.67%
+    20% halt         first 2016-06-23T01:30:00Z, 4 episodes
+    2016-2018        growth ×0.676 (benchmark ×8.43), worst drawdown 59.3% (benchmark 84.0%), 195 trades, fees 68.54 USD, funding 33.84 USD, long 27.4%, hit→hit 12 (+5.88%), hit→false 37 (+3.62%), false→hit 26 (-3.37%), false→false 120 (-0.85%), 20% halt first 2016-06-23T01:30:00Z, 1 episode
+    2019-2021        growth ×2.43 (benchmark ×12.5), worst drawdown 54.9% (benchmark 71.1%), 175 trades, fees 97.32 USD, funding 74.40 USD, long 43.2%, hit→hit 9 (+2.55%), hit→false 39 (+2.61%), false→hit 21 (-1.30%), false→false 106 (+0.17%), 20% halt first 2019-07-28T22:00:00Z, 4 episodes
+    2022-2024        growth ×0.501 (benchmark ×1.48), worst drawdown 56.5% (benchmark 67.5%), 64 trades, fees 32.57 USD, funding 61.75 USD, long 39.6%, hit→hit 0, hit→false 9 (+6.18%), false→hit 7 (-6.49%), false→false 48 (-1.06%), 20% halt first 2022-01-21T21:45:00Z, 1 episode
+  bar (ADR-0008)     growth at least the benchmark's in every era under the perpetual cost model: fail (2016-2018 ×0.676 vs ×8.43, 2019-2021 ×2.43 vs ×12.5, 2022-2024 ×0.501 vs ×1.48)
+```
+
+The flip passes or fails nothing: the bar is absolute and the flip only prices it. Candidate strategies are pre-registered in their own issues, as detectors are, and each one's single development run, its verdict and its re-scorings are recorded there.
 
 ## Check the hourly candles built from the fifteen-minute ones
 
@@ -163,6 +218,25 @@ Fixed in issue #20 before detector three's first run, with the same rule: changi
 | Detector three | a top mark on an armed candle whose high is below the swing extreme while the extreme is at least 8% above the swing low (`extreme >= swing low × 1.08`), placed at that candle's close; bottoms are the mirror (`extreme <= swing high × 0.92`); when one candle qualifies for both, the side whose swing is larger in percent wins and equal swings give no mark, the other side keeping its arming; at most one mark per candle; no depth, no levels, no run, no volume | `detectors.py` |
 | Timing of knowledge | a turning point confirmed by an hourly candle is known from the fifteen-minute candle that completes that hour, on that same candle | `replay.py` |
 | Swing extremes in the chart data | every replay answers the swing extremes the detector read, each with the candle holding it, the first candle the detector read it on and the last one that read it, so the dashboard draws what the detector used | `replay.py` |
+
+## Definitions fixed in slice 9
+
+Decided on 20 October 2026 and recorded in ADR-0008 before any strategy ran, on facts that involve no strategy (issue #32). The cost models and the bar are harness definitions under ADR-0004: they change only by ADR, and every recorded backtest is then re-scored and the numbers appended to its issue.
+
+| Definition | Value | Where |
+| --- | --- | --- |
+| Account | a notional 500 USD, flat at the first candle of the scoring period; the strategy is asked at every fifteen-minute close from then on; all in at every fill, 1x, no rounding to a minimum order size | `backtest.py` |
+| Fill | a market order sent at the close the strategy changed its mind on, filled at the next candle's open moved 0.05% against the bot, plus the model's fee on the fill's value | `backtest.py` |
+| Spot cost model | 0.80% a fill, no funding | `backtest.py` |
+| Perpetual cost model | 0.05% a fill, and funding of 0.00125% of the position's value at every hourly close while long (11% a year), drawn from the USD side | `backtest.py` |
+| Benchmark | one account that buys Bitcoin at the first candle of the scoring period with one spot fill and holds; the same under both cost models | `backtest.py` |
+| Growth | the value at the period's last close over the value at the close before the period began; the starting 500 USD for the first era and for the whole period | `backtest.py` |
+| Worst drawdown | the largest fall from an earlier peak over the closes of the period, in percent of that peak | `backtest.py` |
+| Drawdown halt | a 20% fall from the peak; the first close it would fire at and the number of episodes are reported, a new episode needing a new peak; never applied | `backtest.py` |
+| Trade | one round trip; its result is the account's value after the exit fill less its value after the entry fill, in percent of the latter; it belongs to the era its entry filled in and to the group of the outcomes of the marks that opened and closed it | `backtest.py` |
+| Bar | growth at least the benchmark's in every era under the perpetual cost model; the spot column is reported, no bar | `backtest.py` |
+| What a strategy reads | the candles so far, the marks so far each with the swing extreme it was measured against, the turning points confirmed so far, and its own position; never a mark's outcome | `strategies.py` |
+| Flip | the reference: long on a bottom mark when flat, flat on a top mark when long, nothing else; never a candidate | `strategies.py` |
 
 ## Definitions fixed in slice 3
 
@@ -222,11 +296,13 @@ src/tradingbot/
   detectors.py       the Detector interface, Mark, Level, SwingExtreme, the floor detector, detectors one, two and three
   scoring.py         tolerance B, the scoring period, the eras, and the score
   replay.py          replay: candles to a detector one at a time, hours built from 15-minute candles, then the score
-  re_score.py        a recorded run replayed on its own candles and scored under the current definitions
+  re_score.py        a recorded run (and a recorded backtest on it) replayed on its own candles and scored under the current definitions
   hourly_check.py    the hourly candles built from 15-minute ones against the stored hourly table
   out_of_sample.py   the one explicit check past the boundary, logged per run
-  api.py             the FastAPI app with GET /candles, /turning-points and /replay
-  cli.py             the tradingbot command: import, catch-up, serve, replay, re-score, check-hourly, out-of-sample
+  strategies.py      the Strategy interface, what a strategy reads, and the flip
+  backtest.py        the strategy backtest: the account, the two cost models, the benchmark, the strategy score and the bar
+  api.py             the FastAPI app with GET /candles, /turning-points and /replay (with an optional strategy)
+  cli.py             the tradingbot command: import, catch-up, serve, replay, re-score, check-hourly, out-of-sample, backtest
 tests/               pytest suite
 dashboard/           SvelteKit app: hindsight view and replay
 docs/adr/            architecture decision records

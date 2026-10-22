@@ -7,14 +7,23 @@
 		fetchCandles,
 		fetchReplay,
 		fetchTurningPoints,
+		STRATEGIES,
 		TIMEFRAMES,
 		type Candle,
 		type Replay,
 		type Score,
+		type StrategyScore,
 		type Timeframe,
 		type TurningPoint
 	} from '#lib/api.ts';
-	import { COLORS, startIndex, toLines, type ChartLine, type ChartMark } from '#lib/chart.ts';
+	import {
+		COLORS,
+		startIndex,
+		toLines,
+		type ChartFill,
+		type ChartLine,
+		type ChartMark
+	} from '#lib/chart.ts';
 
 	type Mode = 'hindsight' | 'replay';
 	const SPEEDS = [1, 10, 100, 1000];
@@ -35,6 +44,8 @@
 	const fromTime = $derived(from === '' ? null : Date.parse(`${from}T00:00:00Z`) / 1000);
 	let timeframe = $state<Timeframe>('1h');
 	let detector = $state(DETECTORS[0]);
+	/** The strategy walked over the replay, drawn and scored next to the detector; '' for none. */
+	let strategy = $state('');
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 
@@ -51,9 +62,12 @@
 	let speed = $state(100);
 
 	$effect(() => {
-		const wanted = { mode, timeframe, detector };
+		const wanted = { mode, timeframe, detector, strategy };
 		const current = () =>
-			wanted.mode === mode && wanted.timeframe === timeframe && wanted.detector === detector;
+			wanted.mode === mode &&
+			wanted.timeframe === timeframe &&
+			wanted.detector === detector &&
+			wanted.strategy === strategy;
 		loading = true;
 		error = null;
 		pause();
@@ -66,7 +80,7 @@
 							turningPoints = p;
 						}
 					)
-				: fetchReplay(detector).then((r) => {
+				: fetchReplay(detector, strategy === '' ? null : strategy).then((r) => {
 						if (!current()) return;
 						replay = r;
 						cursor = start;
@@ -118,11 +132,20 @@
 					}))
 			: []
 	);
+	/** The strategy's fills up to the latest shown candle, each on the candle it filled on. */
+	const shownFills = $derived<ChartFill[]>(
+		replay?.backtest
+			? replay.backtest.fills
+					.filter((f) => f.time <= now)
+					.map((f) => ({ side: f.side, time: f.time, price: f.price }))
+			: []
+	);
 	/** What the status line counts: only what came on or after the start date, so it tells
 	 * what you are watching; the score below stays the whole scoring period's. */
 	const since = (time: number) => fromTime === null || time >= fromTime;
 	const watchedPoints = $derived(shownPoints.filter((p) => since(p.confirmed_at)));
 	const watchedMarks = $derived(shownMarks.filter((m) => since(m.time)));
+	const watchedFills = $derived(shownFills.filter((f) => since(f.time)));
 	const tally = $derived({
 		hits: watchedMarks.filter((m) => m.state === 'hit').length,
 		false: watchedMarks.filter((m) => m.state === 'false').length,
@@ -190,6 +213,46 @@
 		score.marks > 0 && score.hits === 0
 			? 'n/a (no hits)'
 			: `${score.false_marks_per_hit.toFixed(1)} per hit`;
+
+	/** A growth as the batch command prints it: three significant figures after a times sign. */
+	const growth = (value: number | null) =>
+		value === null
+			? 'n/a'
+			: value >= 100
+				? `×${value.toFixed(0)}`
+				: value >= 10
+					? `×${value.toFixed(1)}`
+					: value >= 1
+						? `×${value.toFixed(2)}`
+						: `×${parseFloat(value.toPrecision(3))}`;
+	const pct = (value: number | null) => (value === null ? 'n/a' : `${value.toFixed(1)}%`);
+	const usd = (value: number) =>
+		`${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
+	const signedPct = (value: number) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+	const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+	/** A strategy score on one line, as the batch command prints an era: the money numbers,
+	 * then each group's count and mean result, opened on → closed on. */
+	function describeStrategy(score: StrategyScore): string {
+		if (score.growth === null) return 'no candles';
+		const groups = score.groups
+			.map(
+				(g) =>
+					`${g.opened_on_hit ? 'hit' : 'false'}→${g.closed_on_hit ? 'hit' : 'false'} ${g.trades}` +
+					(g.mean === null ? '' : ` (${signedPct(g.mean)})`)
+			)
+			.join(', ');
+		const halt =
+			score.halt_at === null
+				? 'never'
+				: `first ${utc(score.halt_at)}, ${plural(score.halt_episodes, 'episode')}`;
+		return (
+			`growth ${growth(score.growth)} (benchmark ${growth(score.benchmark_growth)}), ` +
+			`worst drawdown ${pct(score.worst_drawdown)} (benchmark ${pct(score.benchmark_worst_drawdown)}), ` +
+			`${plural(score.trades, 'trade')}, fees ${usd(score.fees)}, funding ${usd(score.funding)}, ` +
+			`long ${percent(score.share_long)}, ${groups}, 20% halt ${halt}`
+		);
+	}
 
 	function describe(score: Score): string {
 		const timing =
@@ -261,6 +324,15 @@
 					{/each}
 				</select>
 			</label>
+			<label>
+				Strategy
+				<select bind:value={strategy}>
+					<option value="">none</option>
+					{#each STRATEGIES as option (option)}
+						<option value={option}>{option}</option>
+					{/each}
+				</select>
+			</label>
 			<div class="controls" role="group" aria-label="Replay">
 				{#if playing}
 					<button type="button" onclick={pause}>Pause</button>
@@ -301,7 +373,9 @@
 					{replay.timeframe} candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
 						? `, ${utc(now)}`
 						: ''}: {watchedPoints.length} turning points confirmed, {shownLevels.length} levels active,
-					{shownExtremes.length} swing extremes standing, {watchedMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending, {tally.unscored} before the scoring period
+					{shownExtremes.length} swing extremes standing, {watchedMarks.length} marks placed, {tally.hits} hits, {tally.false} false, {tally.pending} pending, {tally.unscored} before the scoring period{replay.backtest
+						? `, ${watchedFills.length} fills`
+						: ''}
 				{/if}
 			{/if}
 		</p>
@@ -317,6 +391,23 @@
 					<li><strong>{era.era.name}</strong>: {describe(era.score)}</li>
 				{/each}
 			</ul>
+			{#if replay.backtest}
+				{#each replay.backtest.scores as scored (scored.model)}
+					<p>
+						<strong>{replay.backtest.strategy}</strong> under the {scored.model} cost model, the
+						account from {utc(replay.backtest.scored_from)}: {describeStrategy(scored.score)}
+					</p>
+					<ul class="eras">
+						{#each scored.score.eras as era (era.era.name)}
+							<li><strong>{era.era.name}</strong>: {describeStrategy(era.score)}</li>
+						{/each}
+					</ul>
+				{/each}
+				<p>
+					<strong>bar (ADR-0008)</strong>: growth at least the benchmark's in every era under the
+					perpetual cost model: {replay.backtest.passes ? 'pass' : 'fail'}
+				</p>
+			{/if}
 		</div>
 	{/if}
 	{#if mode === 'hindsight'}
@@ -329,6 +420,7 @@
 			turningPoints={shownPoints}
 			lines={[...shownLevels, ...shownExtremes]}
 			marks={shownMarks}
+			fills={shownFills}
 		/>
 	{/if}
 	<p class="legend">
@@ -345,6 +437,10 @@
 			<span class="unscored">light grey</span> before the scoring period (2016) ·
 			<span class="pending">grey</span> pending · <span class="hit">green</span> hit ·
 			<span class="false">red</span> false mark
+			{#if replay.backtest}
+				· <span class="buy">■</span> buy · <span class="sell">■</span> sell, each on the candle it
+				filled on (the next candle's open after the mark)
+			{/if}
 		{/if}
 	</p>
 </main>
@@ -467,5 +563,11 @@
 	}
 	.false {
 		color: #c62828;
+	}
+	.buy {
+		color: #00838f;
+	}
+	.sell {
+		color: #ad1457;
 	}
 </style>

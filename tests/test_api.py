@@ -405,3 +405,45 @@ def test_detector_three_is_replayed_on_the_fifteen_minute_candles(
     assert body["marks"] == [] and body["levels"] == []
     assert body["swing_extremes"] == []  # one hour confirms no turning point
     assert body["score"]["turning_points"] == 0
+
+
+def test_a_replay_with_a_strategy_answers_the_fills_and_the_strategy_score(
+    harness_client: TestClient,
+) -> None:
+    body = harness_client.get("/replay", params={"detector": "floor", "strategy": "flip"}).json()
+
+    # The floor's bottom mark at 04:00 puts the flip long at 05:00's open, its top mark at
+    # 09:00 flat at 10:00's open, its bottom mark at 13:00 long again at 14:00's open.
+    backtest = body["backtest"]
+    assert (backtest["detector"], backtest["strategy"]) == ("floor", "flip")
+    assert [(f["side"], f["time"], f["mark"]) for f in backtest["fills"]] == [
+        ("buy", DAY_START + 5 * H, DAY_START + 4 * H),
+        ("sell", DAY_START + 10 * H, DAY_START + 9 * H),
+        ("buy", DAY_START + 14 * H, DAY_START + 13 * H),
+    ]
+    assert backtest["fills"][0]["price"] == pytest.approx(95 * 1.0005)
+    assert [s["model"] for s in backtest["scores"]] == ["spot", "perpetual"]
+    spot = backtest["scores"][0]["score"]
+    assert spot["trades"] == 1
+    assert [g["trades"] for g in spot["groups"]] == [0, 0, 0, 1]
+    assert (
+        spot["growth"] < 1 < spot["benchmark_growth"] or spot["growth"] < spot["benchmark_growth"]
+    )
+    assert [e["era"]["name"] for e in spot["eras"]] == ["2016-2018", "2019-2021", "2022-2024"]
+    assert backtest["values"]["times"] == [DAY_START + h * H for h in range(16) if h != 2]
+    assert backtest["passes"] is False
+    # Everything the replay answered without a strategy is still there.
+    assert body["detector"] == "floor" and len(body["marks"]) == 4 and body["score"]["marks"] == 4
+
+
+def test_a_replay_without_a_strategy_answers_no_backtest(harness_client: TestClient) -> None:
+    body = harness_client.get("/replay", params={"detector": "floor"}).json()
+
+    assert body["backtest"] is None
+
+
+def test_an_unknown_strategy_is_rejected(harness_client: TestClient) -> None:
+    response = harness_client.get("/replay", params={"detector": "floor", "strategy": "oracle"})
+
+    assert response.status_code == 404
+    assert "flip" in response.json()["detail"]

@@ -1,5 +1,5 @@
 import type { SeriesMarker, Time, UTCTimestamp } from 'lightweight-charts';
-import type { Candle, Kind, Level, SwingExtreme, TurningPoint } from '#lib/api.ts';
+import type { Candle, Kind, Level, Side, SwingExtreme, TurningPoint } from '#lib/api.ts';
 
 /** The index of the first candle at or after `time`, or `candles.length` when none is; 0
  * when there is no start time. Candles are oldest first, so this is a binary search. */
@@ -26,6 +26,13 @@ export interface ChartMark {
 	timing: number | null;
 }
 
+/** A fill as the chart shows it: a buy or a sell on the candle it filled on. */
+export interface ChartFill {
+	side: Side;
+	time: number;
+	price: number;
+}
+
 /** A horizontal line as the chart draws it, over the candles that have seen it so far: a level
  * the detector sees, or the swing extreme it reads. */
 export interface ChartLine {
@@ -44,7 +51,9 @@ export const COLORS = {
 	unscored: '#d6d6d6',
 	pending: '#9e9e9e',
 	hit: '#2e7d32',
-	false: '#c62828'
+	false: '#c62828',
+	buy: '#00838f',
+	sell: '#ad1457'
 };
 
 /** What a level and a swing extreme share: a price with the span of candles that see it. */
@@ -76,10 +85,12 @@ export function sameMarkers(a: SeriesMarker<Time>[], b: SeriesMarker<Time>[]): b
 	return true;
 }
 
-/** Turning points as blue dots on their extreme, marks as arrows coloured by outcome. */
+/** Turning points as blue dots on their extreme, marks as arrows coloured by outcome, fills as
+ * squares labelled buy or sell on the candle they filled on. */
 export function toMarkers(
 	turningPoints: TurningPoint[],
-	marks: ChartMark[]
+	marks: ChartMark[],
+	fills: ChartFill[] = []
 ): SeriesMarker<Time>[] {
 	const points: SeriesMarker<Time>[] = turningPoints.map((p) => ({
 		time: p.time as UTCTimestamp,
@@ -96,5 +107,12 @@ export function toMarkers(
 		color: COLORS[m.state],
 		text: m.state === 'hit' && m.timing !== null ? (m.timing > 0 ? `+${m.timing}` : `${m.timing}`) : undefined
 	}));
-	return [...points, ...arrows].sort((a, b) => (a.time as number) - (b.time as number));
+	const squares: SeriesMarker<Time>[] = fills.map((f) => ({
+		time: f.time as UTCTimestamp,
+		position: f.side === 'buy' ? 'belowBar' : 'aboveBar',
+		shape: 'square',
+		color: COLORS[f.side],
+		text: f.side
+	}));
+	return [...points, ...arrows, ...squares].sort((a, b) => (a.time as number) - (b.time as number));
 }

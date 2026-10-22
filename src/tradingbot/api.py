@@ -11,7 +11,9 @@ the extreme. `GET /replay?detector=...` replays the development period through
 a detector, on the candles of the detector's timeframe, and answers every
 candle it read, the levels and the swing extremes it read, every mark with its
 outcome where the scoring period scored it, and the score over the scoring
-period, per era.
+period, per era. With `&strategy=...` it also walks that strategy over the
+replay and answers its fills and its score under both cost models (ADR-0008);
+without, nothing changes.
 
 Every route reads through `read_development`, so nothing past the
 out-of-sample boundary is ever served.
@@ -27,12 +29,21 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from tradingbot.backtest import (
+    BacktestResult,
+    CostModel,
+    Fill,
+    ModelScore,
+    ValueSeries,
+    backtest,
+)
 from tradingbot.candles import Candle, Timeframe, period_start, resample
 from tradingbot.detectors import DETECTORS, Level, SwingExtreme
 from tradingbot.development import read_development
 from tradingbot.replay import MarkOutcome, ReplayResult, run
 from tradingbot.scoring import SCORING_START, Score
 from tradingbot.store import STORED_TIMEFRAMES, CandleStore
+from tradingbot.strategies import STRATEGIES
 from tradingbot.turning_points import Kind, TurningPoint, find_turning_points
 
 
@@ -44,6 +55,37 @@ class CandlesOut(BaseModel):
 class TurningPointsOut(BaseModel):
     timeframe: str
     turning_points: list[TurningPoint]
+
+
+class BacktestOut(BaseModel):
+    """A strategy's backtest on a replay: what `backtest` writes next to the store, and what
+    `/replay` answers with a strategy. The candles and marks are the replay's."""
+
+    detector: str
+    strategy: str
+    timeframe: str
+    scored_from: int
+    """The first candle of the scoring period: when the account starts."""
+    cost_models: list[CostModel]
+    fills: list[Fill]
+    values: ValueSeries
+    """The account's value at every hourly close under each cost model, and the benchmark's."""
+    scores: list[ModelScore]
+    passes: bool
+
+    @classmethod
+    def of(cls, result: BacktestResult) -> BacktestOut:
+        return cls(
+            detector=result.detector,
+            strategy=result.strategy,
+            timeframe=result.timeframe.value,
+            scored_from=result.scored_from,
+            cost_models=list(result.cost_models),
+            fills=result.fills,
+            values=result.values,
+            scores=list(result.scores),
+            passes=result.passes,
+        )
 
 
 class ReplayOut(BaseModel):
@@ -58,9 +100,11 @@ class ReplayOut(BaseModel):
     swing_extremes: list[SwingExtreme]
     marks: list[MarkOutcome]
     score: Score
+    backtest: BacktestOut | None = None
+    """The strategy's fills and score when one was asked for; None otherwise."""
 
     @classmethod
-    def of(cls, result: ReplayResult) -> ReplayOut:
+    def of(cls, result: ReplayResult, backtest: BacktestResult | None = None) -> ReplayOut:
         return cls(
             detector=result.detector,
             timeframe=result.timeframe.value,
@@ -71,6 +115,7 @@ class ReplayOut(BaseModel):
             swing_extremes=result.swing_extremes,
             marks=result.marks,
             score=result.score,
+            backtest=None if backtest is None else BacktestOut.of(backtest),
         )
 
 
@@ -162,12 +207,19 @@ def create_app(db_path: str | Path) -> FastAPI:
         return TurningPointsOut(timeframe=timeframe.value, turning_points=placed)
 
     @app.get("/replay")
-    def replay(detector: str) -> ReplayOut:
+    def replay(detector: str, strategy: str | None = None) -> ReplayOut:
         build = DETECTORS.get(detector)
         if build is None:
             known = ", ".join(DETECTORS)
             raise HTTPException(404, f"unknown detector {detector!r}; known detectors: {known}")
+        build_strategy = None if strategy is None else STRATEGIES.get(strategy)
+        if strategy is not None and build_strategy is None:
+            known = ", ".join(STRATEGIES)
+            raise HTTPException(404, f"unknown strategy {strategy!r}; known strategies: {known}")
         instance = build()
-        return ReplayOut.of(run(read(instance.timeframe), instance, score_from=SCORING_START))
+        result = run(read(instance.timeframe), instance, score_from=SCORING_START)
+        if build_strategy is None or not result.scored_candles:
+            return ReplayOut.of(result)
+        return ReplayOut.of(result, backtest(result, build_strategy()))
 
     return app
