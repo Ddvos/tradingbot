@@ -630,3 +630,106 @@ def test_re_score_with_a_strategy_refuses_when_the_fills_differ(
 
     assert "fills" in str(stopped.value) and "backtest-flip.json" in str(stopped.value)
     assert "growth" not in capsys.readouterr().out
+
+
+# --- backtests on any detector (slice 10, ADR-0009) ---------------------------------------
+
+
+def hourly_db(path: Path, hours: int = 600) -> Path:
+    """A seeded hourly walk in the 1h table: the floor marks it."""
+    from tests.walks import random_walk
+
+    db = path / "candles.sqlite"
+    with CandleStore(db) as store:
+        store.upsert(random_walk(hours=hours, seed=7))
+    return db
+
+
+def recorded_floor(path: Path, db: Path, capsys: pytest.CaptureFixture[str]) -> Path:
+    recorded = path / "replay-floor.json"
+    main(["replay", "floor", "--db", str(db), "--out", str(recorded)])
+    capsys.readouterr()
+    return recorded
+
+
+def test_backtest_runs_the_strategy_on_any_detector_and_names_the_chart_data_after_both(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = hourly_db(tmp_path)
+    recorded_floor(tmp_path, db, capsys)
+
+    main(["backtest", "flip", "--detector", "floor", "--db", str(db)])
+
+    printed = capsys.readouterr().out
+    assert "Backtested flip on floor over 600 candles from 2024-01-01T00:00:00Z" in printed
+    assert "  bar (ADR-0008)     " in printed
+    out = tmp_path / "backtest-floor-flip.json"
+    assert f"Wrote the chart data to {out}." in printed
+    data = json.loads(out.read_text())
+    assert (data["detector"], data["strategy"], data["timeframe"]) == ("floor", "flip", "1h")
+    assert len(data["fills"]) > 4
+
+
+def test_backtest_refuses_a_recorded_run_of_another_detector(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = hourly_db(tmp_path)
+    recorded = recorded_floor(tmp_path, db, capsys)
+
+    with pytest.raises(SystemExit) as stopped:
+        main(
+            ["backtest", "flip", "--detector", "one", "--db", str(db), "--recorded", str(recorded)]
+        )
+
+    message = str(stopped.value)
+    assert "floor" in message and "one" in message and "replay-floor.json" in message
+    assert not (tmp_path / "backtest-one-flip.json").exists()
+
+
+def test_backtest_runs_on_the_recorded_runs_own_candles_not_on_todays_store(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The recorded run read 600 hours; the store has grown by 100 since (as it did when the
+    # boundary moved to 2025). The backtest still runs on the recorded run (ADR-0004).
+    from tests.walks import random_walk
+
+    db = hourly_db(tmp_path)
+    recorded_floor(tmp_path, db, capsys)
+    with CandleStore(db) as store:
+        store.upsert(random_walk(hours=700, seed=7)[600:])
+
+    main(["backtest", "flip", "--detector", "floor", "--db", str(db)])
+
+    printed = capsys.readouterr().out
+    assert "Backtested flip on floor over 600 candles" in printed
+    assert "the account from 2024-01-01T00:00:00Z: 600 candles" in printed
+
+
+def test_the_flips_recorded_backtest_on_three_keeps_its_slice_9_name(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = quarter_db(tmp_path)
+    recorded_three(tmp_path, db, capsys)
+
+    main(["backtest", "flip", "--db", str(db)])
+
+    printed = capsys.readouterr().out
+    assert "Backtested flip on three over 2314 candles" in printed
+    assert (tmp_path / "backtest-flip.json").exists()
+    assert not (tmp_path / "backtest-three-flip.json").exists()
+
+
+def test_re_score_with_a_strategy_finds_the_backtest_named_after_detector_and_strategy(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = hourly_db(tmp_path)
+    recorded_floor(tmp_path, db, capsys)
+    main(["backtest", "flip", "--detector", "floor", "--db", str(db)])
+    capsys.readouterr()
+
+    main(["re-score", "floor", "--db", str(db), "--strategy", "flip"])
+
+    printed = capsys.readouterr().out
+    assert "Re-scored floor under ADR-0007" in printed
+    assert "Re-scored flip under ADR-0008" in printed
+    assert f"recorded backtest in {tmp_path / 'backtest-floor-flip.json'}." in printed
