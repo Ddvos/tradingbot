@@ -32,9 +32,10 @@
 
 	type Mode = 'hindsight' | 'replay';
 	const SPEEDS = [1, 10, 100, 1000];
-	/** The first stored day and the last development day: the limits of the start-date picker. */
+	/** The first stored day and the last development day, the day before the out-of-sample
+	 * boundary of 2025-01-01 (ADR-0009): the limits of the start-date picker. */
 	const FIRST_DAY = '2013-10-06';
-	const LAST_DAY = '2024-10-18';
+	const LAST_DAY = '2024-12-31';
 
 	const isDay = (value: string) =>
 		/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
@@ -54,9 +55,11 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 
-	// Hindsight: the whole development period with its true tops and bottoms.
+	// Hindsight: the whole development period with its true tops and bottoms, at the reversal
+	// size the API answered (8%: a picker is a later issue).
 	let candles = $state.raw<Candle[]>([]);
 	let turningPoints = $state.raw<TurningPoint[]>([]);
+	let hindsightReversal = $state(0.08);
 
 	// Replay: the candles of the detector's timeframe handed to it one at a time, over the
 	// scoring period. `cursor` is how many candles have been shown; it only ever grows,
@@ -82,7 +85,8 @@
 						([c, p]) => {
 							if (!current()) return;
 							candles = c;
-							turningPoints = p;
+							turningPoints = p.turning_points;
+							hindsightReversal = p.reversal;
 						}
 					)
 				: fetchReplay(detector, strategy === '' ? null : strategy).then((r) => {
@@ -212,6 +216,13 @@
 
 	const utc = (seconds: number) => new Date(seconds * 1000).toISOString().slice(0, 16) + 'Z';
 	const percent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
+	/** A reversal size as the batch commands print it: 8%, 16%, 12.5%. */
+	const reversalText = (fraction: number) => `${parseFloat((fraction * 100).toPrecision(4))}%`;
+	/** The reversal size of the turning points on the chart: the detector's family's in
+	 * Replay, the hindsight route's in Hindsight. */
+	const shownReversal = $derived(
+		mode === 'replay' && replay ? replay.reversal : hindsightReversal
+	);
 	const signed = (candles: number) => (candles > 0 ? `+${candles}` : `${candles}`);
 	/** A growth as the batch command prints it: three significant figures after a times sign. */
 	const growth = (value: number | null) =>
@@ -233,9 +244,10 @@
 	/** The columns of every score table: the eras, then the whole period last. */
 	const columns = (eras: { era: Era }[]) => [...eras.map((e) => e.era.name), 'whole period'];
 
-	/** The detector's score as rows, one cell per era and one for the period. The hit rate
-	 * reads green at or above the 80% bar of ADR-0005 and red below it. */
-	function detectorRows(score: Score): Row[] {
+	/** The detector's score as rows, one cell per era and one for the period, the turning
+	 * points those of the detector's reversal size. The hit rate reads green at or above the
+	 * 80% bar of ADR-0005 and red below it. */
+	function detectorRows(score: Score, reversal: number): Row[] {
 		const scores = [...score.eras.map((e) => e.score), score];
 		const row = (
 			label: string,
@@ -246,7 +258,7 @@
 		return [
 			row(
 				'turning points',
-				'Tops and bottoms found in hindsight: the extreme before the market moved at least 8% the other way.',
+				`Tops and bottoms found in hindsight: the extreme before the market moved at least ${reversalText(reversal)}, the reversal size of the detector's family, the other way.`,
 				(s) => String(s.turning_points)
 			),
 			row('marks', "The detector's claims, at most one per candle.", (s) => String(s.marks)),
@@ -552,7 +564,7 @@
 				<span class="error">{error}</span>
 			{:else if mode === 'hindsight'}
 				{#if candles.length === 0}
-					No {timeframe} candles in the development period (before 2024-10-19). Import an
+					No {timeframe} candles in the development period (before 2025-01-01). Import an
 					archive that covers it.
 				{:else}
 					{candles.length.toLocaleString()} {timeframe} candles from {utc(candles[0].time)} to {utc(
@@ -561,7 +573,7 @@
 				{/if}
 			{:else if replay}
 				{#if total === 0}
-					No {replay.timeframe} candles in the development period (before 2024-10-19). Import an
+					No {replay.timeframe} candles in the development period (before 2025-01-01). Import an
 					archive that covers it.
 				{:else}
 					{replay.timeframe} candle {cursor.toLocaleString()} of {total.toLocaleString()}{cursor > 0
@@ -577,7 +589,8 @@
 	{#if mode === 'replay' && replay && total > 0}
 		<div class="score">
 			<p class="summary">
-				<strong>{replay.detector}</strong> found {replay.score.hits} of {replay.score.turning_points}
+				<strong>{replay.detector}</strong> (reversal size {reversalText(replay.reversal)}) found {replay
+					.score.hits} of {replay.score.turning_points}
 				turning points ({percent(replay.score.hit_rate)}; per era {replay.score.eras
 					.map((e) => percent(e.score.hit_rate))
 					.join(', ')}) and placed {replay.score.false_marks_per_hit.toFixed(1)} false marks for every
@@ -608,9 +621,11 @@
 				<summary>every number, as the batch commands print them</summary>
 				<div class="tables">
 					<ScoreTable
-						caption="{replay.detector} on {replay.timeframe} candles over the scoring period"
+						caption="{replay.detector} on {replay.timeframe} candles over the scoring period, turning points at {reversalText(
+							replay.reversal
+						)}"
 						columns={columns(replay.score.eras)}
-						rows={detectorRows(replay.score)}
+						rows={detectorRows(replay.score, replay.reversal)}
 					/>
 				</div>
 				{#if replay.backtest}
@@ -643,14 +658,14 @@
 		/>
 	{/if}
 	<p class="legend">
-		<span class="dot"></span> turning point (8% reversal, in hindsight)
+		<span class="dot"></span> turning point ({reversalText(shownReversal)} reversal, in hindsight)
 		{#if mode === 'replay' && replay && !loading}
 			{#if replay.levels.length > 0}
 				· <span class="level">orange line</span> level the detector sees (zone within 1%)
 			{/if}
 			{#if replay.swing_extremes.length > 0}
 				· <span class="extreme">purple line</span> swing extreme the detector reads (a mark on the
-				first candle short of it, once the swing is 8%)
+				first candle short of it, once the swing is {reversalText(replay.reversal)})
 			{/if}
 			· <span class="arrow">▼</span> top mark · <span class="arrow">▲</span> bottom mark ·
 			<span class="unscored">light grey</span> before the scoring period (2016) ·
