@@ -733,3 +733,63 @@ def test_re_score_with_a_strategy_finds_the_backtest_named_after_detector_and_st
     assert "Re-scored floor under ADR-0007" in printed
     assert "Re-scored flip under ADR-0008" in printed
     assert f"recorded backtest in {tmp_path / 'backtest-floor-flip.json'}." in printed
+
+
+# --- the check with the flip (slice 10, ADR-0009) -------------------------------------------
+
+
+def test_out_of_sample_with_the_flip_prints_both_scores_logs_one_line_and_writes_both_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    db = store_across_the_boundary(tmp_path)
+    log = tmp_path / "out-of-sample.log"
+
+    main(["out-of-sample", "floor", "--strategy", "flip", "--db", str(db)])
+
+    printed = capsys.readouterr().out
+    assert "Replayed floor over 600 candles" in printed
+    assert "scored out of sample: 300 candles from 2025-01-01T00:00:00Z" in printed
+    assert "  reversal size    8%" in printed
+    assert "Backtested flip on floor over 600 candles" in printed
+    assert "the account from 2025-01-01T00:00:00Z: 300 candles" in printed
+    assert "  under the perpetual cost model" in printed
+    assert "    2022-2024" not in printed, "the check has no eras"
+    assert "  bar (ADR-0009)     growth at least the benchmark's over the period as one" in printed
+    assert "Logged this run in out-of-sample.log." in printed
+    replay_out = tmp_path / "out-of-sample-floor.json"
+    backtest_out = tmp_path / "out-of-sample-floor-flip.json"
+    assert f"Wrote the chart data to {replay_out}." in printed
+    assert f"Wrote the chart data to {backtest_out}." in printed
+    assert json.loads(replay_out.read_text())["scored_from"] == OUT_OF_SAMPLE_BOUNDARY
+    data = json.loads(backtest_out.read_text())
+    assert (data["detector"], data["strategy"]) == ("floor", "flip")
+    assert data["scored_from"] == OUT_OF_SAMPLE_BOUNDARY
+    assert data["values"]["times"][0] == OUT_OF_SAMPLE_BOUNDARY
+    assert data["scores"][0]["score"]["eras"] == []
+    lines = log.read_text().splitlines()
+    assert len(lines) == 1
+    assert lines[0].count("\t") == 4
+    assert "\tfloor\t" in lines[0] and "\tflip" in lines[0] and "bar (ADR-0009)" in lines[0]
+
+
+def test_out_of_sample_refuses_a_detector_already_in_the_log_in_both_forms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Detector three's line from 20 October 2026 (#28): its check is spent.
+    monkeypatch.chdir(tmp_path)
+    db = quarter_db(tmp_path)
+    log = tmp_path / "out-of-sample.log"
+    log.write_text(
+        "2026-10-20T19:47:32Z\tthree\t68296 candles from 2024-10-19T00:00:00Z to "
+        "2026-09-30T23:45:00Z\tturning points 66, marks 752\n"
+    )
+
+    for form in (["out-of-sample", "three", "--strategy", "flip"], ["out-of-sample", "three"]):
+        with pytest.raises(SystemExit) as stopped:
+            main([*form, "--db", str(db)])
+
+        assert "three" in str(stopped.value) and "already" in str(stopped.value)
+        assert "out-of-sample.log" in str(stopped.value)
+    assert not (tmp_path / "out-of-sample-three.json").exists()
+    assert not (tmp_path / "out-of-sample-three-flip.json").exists()

@@ -1,6 +1,7 @@
 """The `tradingbot` command: import the archive, catch up, serve the API, replay a detector,
 re-score a recorded run (and a recorded backtest on it), check the hourly candles built from
-the fifteen-minute ones, run the one out-of-sample check, backtest a strategy."""
+the fifteen-minute ones, run the one out-of-sample check (with the flip for a detector of
+family three), backtest a strategy on a detector's recorded run."""
 
 from __future__ import annotations
 
@@ -287,17 +288,28 @@ def run_check_hourly(db: Path) -> None:
     )
 
 
-def run_out_of_sample(db: Path, name: str, out: Path | None) -> None:
+def run_out_of_sample(db: Path, name: str, strategy_name: str | None, out: Path | None) -> None:
+    """The one check past the boundary; with a strategy, the flip on a detector of family
+    three (ADR-0009), its chart data goes next to the replay's with the strategy's name
+    appended."""
     detector = detector_named(name)
+    strategy = None if strategy_name is None else strategy_named(strategy_name)
     log = Path(out_of_sample.DEFAULT_LOG)
     try:
         with CandleStore(db, detector.timeframe) as store:
-            result = out_of_sample.check(store, detector, log, now=int(time.time()))
+            checked = out_of_sample.check(store, detector, log, int(time.time()), strategy)
     except out_of_sample.Refused as refused:
         sys.exit(str(refused))
-    print(report(result, "out of sample"))
+    print(report(checked.replay, "out of sample"))
+    if checked.backtest is not None:
+        print(report_backtest(checked.backtest, checked.replay))
     print(f"Logged this run in {log}.")
-    write_chart_data(result, out or db.parent / f"out-of-sample-{name}.json")
+    out = out or db.parent / f"out-of-sample-{name}.json"
+    write_chart_data(checked.replay, out)
+    if checked.backtest is not None:
+        write_chart_data(
+            checked.backtest, out.with_name(f"{out.stem}-{checked.backtest.strategy}.json")
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -402,11 +414,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     checker.add_argument("detector", help=f"detector name: {', '.join(DETECTORS)}")
     checker.add_argument(
+        "--strategy",
+        default=None,
+        help=(
+            "also walk this strategy over the replay from the boundary on, the account starting "
+            "there, and judge it over the period as one (ADR-0009); its chart data goes to "
+            f"out-of-sample-<detector>-<strategy>.json: {', '.join(STRATEGIES)}"
+        ),
+    )
+    checker.add_argument(
         "--out",
         type=Path,
         default=None,
         help=(
-            "JSON file for the chart data "
+            "JSON file for the replay's chart data "
             "(default: out-of-sample-<detector>.json next to the store)"
         ),
     )
@@ -461,6 +482,6 @@ def main(argv: list[str] | None = None) -> None:
         case "check-hourly":
             run_check_hourly(args.db)
         case "out-of-sample":
-            run_out_of_sample(args.db, args.detector, args.out)
+            run_out_of_sample(args.db, args.detector, args.strategy, args.out)
         case "backtest":
             run_backtest(args.db, args.strategy, args.detector, args.recorded, args.out)

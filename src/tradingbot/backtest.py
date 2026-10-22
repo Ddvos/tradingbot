@@ -288,7 +288,8 @@ class ValueSeries:
 
 
 BAR_COST_MODEL = PERPETUAL
-"""The cost model the bar of ADR-0008 reads: growth at least the benchmark's in every era."""
+"""The cost model the bar reads: growth at least the benchmark's in every era (ADR-0008), or
+over the period as one when a run has no eras, the out-of-sample check (ADR-0009)."""
 
 
 @dataclass(frozen=True)
@@ -304,8 +305,10 @@ class BacktestResult:
     scores: tuple[CostModelScore, ...]
     """The strategy score under each cost model, in `cost_models` order."""
     passes: bool
-    """The bar of ADR-0008: growth at least the benchmark's in every era that has closes,
-    under the perpetual cost model."""
+    """The bar: growth at least the benchmark's under the perpetual cost model, in every era
+    that has closes (ADR-0008), or over the period as one when the run has no eras, the
+    out-of-sample check (ADR-0009). For the flip on a detector of family three this is the
+    detector's own verdict."""
 
 
 def extremes_by_mark(
@@ -527,13 +530,21 @@ def score_walked(walked: Walked, cost_model: CostModel, eras: Sequence[Era]) -> 
 
 
 def bar_score(scores: Sequence[CostModelScore]) -> StrategyScore:
-    """The score the bar of ADR-0008 reads: the one under `BAR_COST_MODEL`."""
+    """The score the bar reads: the one under `BAR_COST_MODEL`."""
     return next(s.score for s in scores if s.model == BAR_COST_MODEL.name)
 
 
-def beats_benchmark_every_era(score: StrategyScore) -> bool:
-    """The bar of ADR-0008: growth at least the benchmark's in every era that has closes."""
-    judged = [e.score for e in score.eras if e.score.growth is not None]
+def judged_periods(score: StrategyScore) -> list[StrategyScore]:
+    """The periods the bar judges: every era that has closes, or the whole period when the
+    score has no eras (the out-of-sample check, ADR-0009)."""
+    if not score.eras:
+        return [score] if score.growth is not None else []
+    return [e.score for e in score.eras if e.score.growth is not None]
+
+
+def beats_benchmark(score: StrategyScore) -> bool:
+    """The bar: growth at least the benchmark's in every judged period."""
+    judged = judged_periods(score)
     return bool(judged) and all(
         s.benchmark_growth is not None and s.growth is not None and s.growth >= s.benchmark_growth
         for s in judged
@@ -557,7 +568,7 @@ def backtest(
         walked.fills,
         walked.hourly,
         scores,
-        beats_benchmark_every_era(bar_score(scores)),
+        beats_benchmark(bar_score(scores)),
     )
 
 
@@ -654,20 +665,35 @@ def describe_strategy_score(score: StrategyScore) -> list[tuple[str, str]]:
     return lines
 
 
+CHECK_ADR = "ADR-0009"
+"""The ADR that fixed the out-of-sample check's bar: the period as one, no eras."""
+
+
 def describe_verdict(result: BacktestResult) -> tuple[str, str]:
-    """The bar of ADR-0008 read out: pass or fail, with every judged era's growth against
-    the benchmark's under the perpetual cost model."""
+    """The bar read out: pass or fail, with every judged period's growth against the
+    benchmark's under the perpetual cost model; the eras (ADR-0008), or the period as one
+    when the run has none (ADR-0009)."""
     bar = bar_score(result.scores)
-    judged = ", ".join(
-        f"{e.era.name} {describe_growth(e.score.growth)} vs "
-        f"{describe_growth(e.score.benchmark_growth)}"
-        for e in bar.eras
-        if e.score.growth is not None
-    )
     verdict = "pass" if result.passes else "fail"
+    if bar.eras:
+        judged = ", ".join(
+            f"{e.era.name} {describe_growth(e.score.growth)} vs "
+            f"{describe_growth(e.score.benchmark_growth)}"
+            for e in bar.eras
+            if e.score.growth is not None
+        )
+        return (
+            f"bar ({COST_MODELS_ADR})",
+            f"growth at least the benchmark's in every era under the {BAR_COST_MODEL.name} cost "
+            f"model: {verdict} ({judged or 'no era has candles'})",
+        )
+    judged = (
+        f"{describe_growth(bar.growth)} vs {describe_growth(bar.benchmark_growth)}"
+        if bar.growth is not None
+        else "no candles"
+    )
     return (
-        f"bar ({COST_MODELS_ADR})",
-        f"growth at least the benchmark's in every era under the {BAR_COST_MODEL.name} cost "
-        f"model: "
-        f"{verdict} ({judged or 'no era has candles'})",
+        f"bar ({CHECK_ADR})",
+        f"growth at least the benchmark's over the period as one under the "
+        f"{BAR_COST_MODEL.name} cost model: {verdict} ({judged})",
     )
