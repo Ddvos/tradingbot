@@ -28,6 +28,10 @@ _Avoid_: holding, exposure
 The hourly payment exchanged between long and short holders of the perpetual; a cost or an income of holding a position.
 _Avoid_: interest, carry
 
+**Basis**:
+The difference between the perpetual's price and spot's at the same moment, in percent of spot.
+_Avoid_: premium, spread, gap
+
 **Benchmark**:
 Buying Bitcoin at the start of a period and holding it to the end. Every strategy is judged against it.
 _Avoid_: baseline, control, buy-and-hold strategy
@@ -51,8 +55,8 @@ A turning point is confirmed by the first later candle that completes the revers
 _Avoid_: detected, validated, locked in
 
 **Reversal size**:
-The percentage move against the prevailing direction that, in hindsight, makes the preceding extreme a turning point.
-_Avoid_: threshold, deviation, sensitivity
+The percentage move against the prevailing direction that, in hindsight, makes the preceding extreme a turning point. Each family declares one before its first run and keeps it; it never follows the market.
+_Avoid_: threshold, deviation, sensitivity, zigzag percentage
 
 **Detector**:
 A set of explicit, readable rules that, at the close of each candle, decide whether to place a mark.
@@ -130,6 +134,10 @@ _Avoid_: swing high, swing low, running high, running low
 A candle that fails to extend a swing that has reached the reversal size: the first candle short of each new swing extreme. Every turning point ends with one; most pauses end no turn.
 _Avoid_: consolidation, stall, pullback, dip, hesitation
 
+**Retreat**:
+The move against the current swing, from the swing extreme to the furthest close short of it before a new extreme, in percent of the extreme. Every swing ends in a retreat that reaches the reversal size; most retreats are shallower and the swing goes on.
+_Avoid_: pullback, correction, retracement, confirmation
+
 **Swing low**:
 Where the current up-swing starts: the lowest fifteen-minute low at or after the start of the hour holding the last confirmed top. Not a bottom, and not the swing extreme. Before any top is confirmed there is none.
 _Avoid_: bottom, low, support, anchor
@@ -165,7 +173,7 @@ A set of explicit, readable rules that turn marks and market data into a desired
 _Avoid_: model, algorithm, signal generator
 
 **Flip**:
-The reference strategy, kept for comparison: all in at a bottom mark when flat, all out at a top mark when long, every mark acted on. It is never a candidate and sets no bar.
+The reference strategy, kept for comparison: all in at a bottom mark when flat, all out at a top mark when long, every mark acted on. It is never a candidate and sets no bar of its own; from family three on, a detector's bar is measured through the flip on its marks.
 _Avoid_: baseline, naive strategy, buy-and-sell-every-mark
 
 **Trade**:
@@ -215,7 +223,7 @@ The pass/fail rule a detector or strategy must meet, written down before its rep
 _Avoid_: gate, target, hypothesis
 
 **Family**:
-The detectors, or the strategies, that test one hypothesis, each a new iteration of the last. A family gets one out-of-sample check in all, and is dropped when it fails it.
+The detectors, or the strategies, that test one hypothesis at one reversal size, each a new iteration of the last. A family gets one out-of-sample check in all, and is dropped when it fails it.
 _Avoid_: lineage, version line, series
 
 **Iteration**:
@@ -234,6 +242,10 @@ _Avoid_: holdout, validation, test set
 The fixed moment that ends the development period; candles from it on are reserved for out-of-sample checks.
 _Avoid_: cutoff, split date, holdout start
 
+**Out-of-sample period**:
+The stored history from the out-of-sample boundary on. Nothing reads it but an out-of-sample check.
+_Avoid_: holdout, test set, forward period
+
 **Development period**:
 The stored history before the out-of-sample boundary: the only candles a detector, a strategy, a replay, a backtest or a chart may read while a detector or a strategy is being designed.
 _Avoid_: training set, in-sample, backtest period
@@ -245,6 +257,14 @@ _Avoid_: scoring window, sample, in-sample
 **Era**:
 A fixed block of years within the scoring period. A success criterion must hold in every era, not only over the period as a whole.
 _Avoid_: regime, epoch, period
+
+**Perfect trading**:
+Being long from each bottom's extreme to the next top's extreme and flat otherwise, which only hindsight can do. Never a candidate: the ceiling a give-up budget is measured against.
+_Avoid_: oracle, hindsight strategy, ceiling strategy
+
+**Give-up budget**:
+For one reversal size and one era, the largest give-up at both ends of every trade with which perfect trading, after costs, still grows at least as much as the benchmark.
+_Avoid_: margin, slack, allowance, edge
 
 **Paper trading**:
 Running the bot against live market data with simulated orders and a simulated account.
