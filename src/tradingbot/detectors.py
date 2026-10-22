@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Protocol
 
 from tradingbot.candles import Candle, Timeframe
-from tradingbot.turning_points import REVERSAL_SIZE, Kind, TurningPoint, fall, rise
+from tradingbot.turning_points import Kind, TurningPoint, fall, rise
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,9 +78,10 @@ class Detector(Protocol):
 
     At the close of every candle of its `timeframe`, `mark`: `candles` are the
     candles so far, oldest first, the latest one last; `levels` are the turning
-    points confirmed so far, always found on hourly candles. Replay never hands
-    a detector a later candle or a later turning point. The answer is the kind
-    of mark to place on the latest candle, or None for no mark.
+    points confirmed so far, always found on hourly candles at the detector's
+    `reversal`. Replay never hands a detector a later candle or a later turning
+    point. The answer is the kind of mark to place on the latest candle, or
+    None for no mark.
 
     Once, at the end, `levels`: the levels the detector reads from the turning
     points, each with the span of candles that see it, so the result can show
@@ -92,6 +93,10 @@ class Detector(Protocol):
     name: str
     timeframe: Timeframe
     """The candles the detector reads: fifteen-minute or hourly."""
+    reversal: float
+    """The reversal size of the detector's family, as a fraction: the turning points it is
+    scored against are found at this size (ADR-0009). A constant declared in code, never
+    read from the market or a setting; families one and two declared 8% (#11)."""
 
     def mark(self, candles: Sequence[Candle], levels: Sequence[TurningPoint]) -> Kind | None: ...
 
@@ -116,6 +121,7 @@ class FloorDetector:
 
     name = "floor"
     timeframe = Timeframe.H1
+    reversal = 0.08
 
     def __init__(self, distance: float = FLOOR_DISTANCE) -> None:
         self._distance = distance
@@ -246,6 +252,7 @@ class DetectorOne:
 
     name = "one"
     timeframe = Timeframe.H1
+    reversal = 0.08
 
     def __init__(self) -> None:
         self._prices: list[float] = []
@@ -282,6 +289,7 @@ class DetectorTwo:
 
     name = "two"
     timeframe = Timeframe.H1
+    reversal = 0.08
 
     def __init__(self) -> None:
         self._first_active = 0
@@ -317,8 +325,10 @@ class Swing:
     the last confirmed bottom's hour and its extreme is the lowest low since.
     """
 
-    def __init__(self, kind: Kind) -> None:
+    def __init__(self, kind: Kind, reversal: float) -> None:
         self.kind = kind
+        self._reversal = reversal
+        """The family's reversal size: the swing can end in a mark once it has reached it."""
         self.start: float | None = None
         """The swing low (top side) or swing high (bottom side); None until a turning
         point of this side's kind has been confirmed."""
@@ -394,14 +404,15 @@ class Swing:
         )
 
     def reached(self) -> bool:
-        """Whether the swing has reached the reversal size: `extreme >= swing low x 1.08`
-        on the top side, `extreme <= swing high x 0.92` on the bottom side."""
+        """Whether the swing has reached the reversal size: `extreme >= swing low x (1 +
+        reversal)` on the top side, `extreme <= swing high x (1 - reversal)` on the bottom
+        side; x 1.08 and x 0.92 at detector three's 8%."""
         if self.start is None or self.extreme is None:
             return False
         extreme = self._extreme_of(self.extreme)
         if self.kind is Kind.TOP:
-            return extreme >= self.start * (1 + REVERSAL_SIZE)
-        return extreme <= self.start * (1 - REVERSAL_SIZE)
+            return extreme >= self.start * (1 + self._reversal)
+        return extreme <= self.start * (1 - self._reversal)
 
     def size(self) -> float:
         """The swing as a fraction of its start, for the tie rule; 0 before it exists."""
@@ -425,21 +436,23 @@ class DetectorThree:
 
     It reads the fifteen-minute candles so far and the hourly turning points
     confirmed so far, nothing else (ADR-0003); its only number is the reversal
-    size. A top mark goes on the first candle whose high stays below the swing
-    extreme once the up-swing, from the swing low to that extreme, is at least
-    the reversal size; a new extreme, a new swing low or a newly confirmed top
-    arms the next mark, and a mark disarms its side until then. Bottoms are the
-    mirror image. When one candle qualifies for both, the side whose swing is
-    larger in percent wins and equal swings give no mark; the other side keeps
-    its arming. At most one mark per candle.
+    size it declares, family two's 8%, which its swing rule reads too, so there
+    is one number, not two. A top mark goes on the first candle whose high
+    stays below the swing extreme once the up-swing, from the swing low to that
+    extreme, is at least the reversal size; a new extreme, a new swing low or a
+    newly confirmed top arms the next mark, and a mark disarms its side until
+    then. Bottoms are the mirror image. When one candle qualifies for both, the
+    side whose swing is larger in percent wins and equal swings give no mark;
+    the other side keeps its arming. At most one mark per candle.
     """
 
     name = "three"
     timeframe = Timeframe.M15
+    reversal = 0.08
 
     def __init__(self) -> None:
-        self._up = Swing(Kind.TOP)
-        self._down = Swing(Kind.BOTTOM)
+        self._up = Swing(Kind.TOP, self.reversal)
+        self._down = Swing(Kind.BOTTOM, self.reversal)
         self._known = 0
         """How many of the turning points handed over have been read."""
 

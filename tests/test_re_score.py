@@ -73,7 +73,7 @@ def test_the_recorded_run_of_detector_three_scores_six_and_a_half_false_marks_pe
 
     assert (scored.result.score.hits, scored.result.score.false_marks) == (719, 4698)
     assert round(scored.result.score.false_marks_per_hit, 1) == 6.5
-    assert ("false marks/hit", "6.5 per hit") in describe_score(scored.result.score)
+    assert ("false marks/hit", "6.5 per hit") in describe_score(scored.result.score, reversal=0.08)
 
 
 def test_re_scoring_refuses_another_detectors_run(tmp_path: Path) -> None:

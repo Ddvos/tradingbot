@@ -22,7 +22,10 @@ from tradingbot.candles import Candle
 
 REVERSAL_SIZE = 0.08
 """The move against the prevailing direction that, in hindsight, makes the
-preceding extreme a turning point: 8%, fixed in slice 2 (#11)."""
+preceding extreme a turning point: 8%, fixed in slice 2 (#11). Since ADR-0009
+each family declares its own reversal size and a replay finds turning points
+at the detector's; this 8% is the hindsight route's size (the Hindsight view
+and `/turning-points`) unless another is asked for."""
 
 
 class Kind(Enum):

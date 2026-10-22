@@ -130,6 +130,7 @@ class Scripted:
 
     name = "scripted"
     timeframe = Timeframe.H1
+    reversal = 0.08
 
     def __init__(self, marks: dict[int, Kind]) -> None:
         self._marks = marks

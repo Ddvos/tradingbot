@@ -49,9 +49,9 @@ class LogEntry:
         return cls(when, detector, period, score)
 
 
-def summarize(score: Score) -> str:
+def summarize(score: Score, reversal: float) -> str:
     """The score on one line, for the log."""
-    return ", ".join(f"{label} {value}" for label, value in describe_score(score))
+    return ", ".join(f"{label} {value}" for label, value in describe_score(score, reversal))
 
 
 def logged_detectors(log: Path) -> list[str]:
@@ -85,7 +85,7 @@ def check(store: CandleStore, detector: Detector, log: Path, now: int) -> Replay
         when=iso(now),
         detector=detector.name,
         period=f"{len(scored)} candles from {iso(scored[0].time)} to {iso(scored[-1].time)}",
-        score=summarize(result.score),
+        score=summarize(result.score, result.reversal),
     )
     with log.open("a") as f:
         f.write(entry.line() + "\n")

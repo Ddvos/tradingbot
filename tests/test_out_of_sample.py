@@ -33,8 +33,8 @@ def test_a_run_is_logged_with_its_time_detector_period_and_score(tmp_path: Path)
     entry = LogEntry.parse(log.read_text().splitlines()[0])
     assert entry.when == "2025-10-09T08:53:20Z"
     assert entry.detector == "floor"
-    assert entry.period == "20 candles from 2024-10-19T00:00:00Z to 2024-10-19T19:00:00Z"
-    assert entry.score.startswith("turning points ")
+    assert entry.period == "20 candles from 2025-01-01T00:00:00Z to 2025-01-01T19:00:00Z"
+    assert entry.score.startswith("reversal size 8%, turning points ")
     assert "hit rate" in entry.score and "median give-up" in entry.score
     assert "false marks/hit" in entry.score
     assert "2022-2024" not in entry.score, "an out-of-sample score has no eras"

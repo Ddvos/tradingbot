@@ -54,3 +54,14 @@ def test_the_floor_waits_for_a_full_three_percent() -> None:
 
 def test_the_floor_is_registered_under_its_name() -> None:
     assert isinstance(DETECTORS["floor"](), FloorDetector)
+
+
+def test_every_detector_declares_the_reversal_size_of_its_family() -> None:
+    # Families one and two were run at 8% (#11); a detector of family three declares its
+    # own size in code, next to its name and timeframe (ADR-0009).
+    assert {name: build().reversal for name, build in DETECTORS.items()} == {
+        "floor": 0.08,
+        "one": 0.08,
+        "two": 0.08,
+        "three": 0.08,
+    }

@@ -14,7 +14,7 @@ from tradingbot.store import CandleStore
 
 H = 3600
 DAY_START = 1_704_067_200  # 2024-01-01T00:00:00Z
-OUT_OF_SAMPLE_BOUNDARY = 1_729_296_000  # 2024-10-19T00:00:00Z
+OUT_OF_SAMPLE_BOUNDARY = 1_735_689_600  # 2025-01-01T00:00:00Z
 
 ARCHIVE_CSV = (
     "1704067200,100.0,110.0,95.0,105.0,1.5,10\n"
@@ -256,7 +256,7 @@ def test_out_of_sample_scores_only_the_candles_past_the_boundary_and_logs_the_ru
 
     printed = capsys.readouterr().out
     assert "Replayed floor over 600 candles" in printed
-    assert "scored out of sample: 300 candles from 2024-10-19T00:00:00Z" in printed
+    assert "scored out of sample: 300 candles from 2025-01-01T00:00:00Z" in printed
     assert "hit rate" in printed and "false-mark rate" in printed and " per hit" in printed
     assert "out-of-sample.log" in printed
     data = json.loads(out.read_text())
@@ -268,7 +268,7 @@ def test_out_of_sample_scores_only_the_candles_past_the_boundary_and_logs_the_ru
     lines = log.read_text().splitlines()
     assert len(lines) == 1
     assert "\tfloor\t" in lines[0]
-    assert "2024-10-19T00:00:00Z" in lines[0] and "hit rate" in lines[0]
+    assert "2025-01-01T00:00:00Z" in lines[0] and "hit rate" in lines[0]
 
 
 def test_out_of_sample_refuses_a_second_run_for_the_same_detector(

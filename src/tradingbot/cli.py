@@ -84,7 +84,9 @@ def report(result: ReplayResult, period: str) -> str:
         f"Replayed {result.detector} over {span(result.candles)}, scored {period}: "
         f"{span(result.scored_candles)}."
     )
-    lines = [f"  {label:<16} {value}" for label, value in describe_score(result.score)]
+    lines = [
+        f"  {label:<16} {value}" for label, value in describe_score(result.score, result.reversal)
+    ]
     return "\n".join([heading, *lines])
 
 

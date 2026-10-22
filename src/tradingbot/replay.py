@@ -2,8 +2,10 @@
 
 At every step the detector is handed the candles so far and the turning points
 confirmed so far, and nothing later, so no future candle can leak into a mark.
-The turning points are always found on hourly candles. An hourly detector's
-candles are those hourly candles themselves. A fifteen-minute detector reads
+The turning points are always found on hourly candles, at the reversal size
+the detector declares for its family (ADR-0009), so a detector is scored
+against the turning points of its own size. An hourly detector's candles are
+those hourly candles themselves. A fifteen-minute detector reads
 fifteen-minute candles, and the hourly candles are built from that stream as
 hours complete: with the candle that ends on the hour, with the first candle
 of a later hour when the hour's last fifteen-minute candle had no trades, or
@@ -91,7 +93,7 @@ def replay(candles: Iterable[Candle], detector: Detector) -> Iterator[Step]:
     """
     seen: list[Candle] = []
     levels: list[TurningPoint] = []
-    finder = TurningPointFinder()
+    finder = TurningPointFinder(detector.reversal)
     hours = HourBuilder(detector.timeframe)
     size = detector.timeframe.seconds
     iterator = iter(candles)
@@ -119,6 +121,8 @@ class Replayed:
 
     detector: str
     timeframe: Timeframe
+    reversal: float
+    """The reversal size the turning points were found at: the detector's."""
     candles: list[Candle]
     """The candles the detector read, oldest first."""
     hourly: list[Candle]
@@ -157,6 +161,7 @@ def replay_all(candles: Sequence[Candle], detector: Detector) -> Replayed:
     return Replayed(
         detector.name,
         detector.timeframe,
+        detector.reversal,
         list(candles),
         hourly,
         completed_at,
@@ -190,6 +195,9 @@ class MarkOutcome:
 class ReplayResult:
     detector: str
     timeframe: Timeframe
+    reversal: float
+    """The reversal size the turning points were found at: the detector's, so the chart
+    data says which turning points it shows."""
     scored_from: int | None
     """Start of the scored period; None when the whole series was scored."""
     candles: list[Candle]
@@ -292,6 +300,7 @@ def score_replayed(
     return ReplayResult(
         replayed.detector,
         replayed.timeframe,
+        replayed.reversal,
         score_from,
         replayed.candles,
         replayed.turning_points,

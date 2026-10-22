@@ -120,7 +120,7 @@ def test_an_unreadable_time_is_rejected(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-OUT_OF_SAMPLE_BOUNDARY = 1_729_296_000  # 2024-10-19T00:00:00Z
+OUT_OF_SAMPLE_BOUNDARY = 1_735_689_600  # 2025-01-01T00:00:00Z
 
 
 def sixteen_hours() -> list[Candle]:

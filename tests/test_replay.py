@@ -28,6 +28,7 @@ class Spy:
     """A detector that records exactly what replay shows it and marks every candle a top."""
 
     name = "spy"
+    reversal = 0.08
 
     def __init__(self, timeframe: Timeframe = Timeframe.H1) -> None:
         self.timeframe = timeframe
@@ -386,3 +387,48 @@ def test_a_fifteen_minute_mark_is_scored_by_its_hour_and_settled_by_a_fifteen_mi
             assert outcome.timing == (period_start(outcome.time, Timeframe.H1) - point.time) // H
             assert outcome.give_up is not None
             assert abs(outcome.give_up) == abs(outcome.price - point.price) / point.price * 100
+
+
+class AtSixteenPercent:
+    """An hourly detector of a family whose reversal size is 16%, marking a bottom on the
+    candles it was told to."""
+
+    name = "sixteen"
+    timeframe = Timeframe.H1
+    reversal = 0.16
+
+    def __init__(self, bottoms_at: set[int]) -> None:
+        self._bottoms_at = bottoms_at
+
+    def mark(self, candles: Sequence[Candle], levels: Sequence[TurningPoint]) -> Kind | None:
+        return Kind.BOTTOM if candles[-1].time in self._bottoms_at else None
+
+    def levels(self, points: Sequence[TurningPoint]) -> list[Level]:
+        return []
+
+    def swing_extremes(self) -> list[SwingExtreme]:
+        return []
+
+
+def test_a_detector_is_scored_against_the_turning_points_of_its_own_reversal_size() -> None:
+    # Closes without wicks: 100, 95, 90, 95, 100, 90, 80, 90, 100. At 8% the legs of 10% and
+    # more all end in turning points: a top at hour 0, a bottom at hour 2 (90), a top at hour
+    # 4 and a bottom at hour 6 (80). At 16% only the fall from 100 to 80 and the rise back
+    # count: a top at hour 0 and a bottom at hour 6.
+    closes = [100.0, 95.0, 90.0, 95.0, 100.0, 90.0, 80.0, 90.0, 100.0]
+    candles = [Candle(T0 + h * H, c, c, c, c, 1.0, 1) for h, c in enumerate(closes)]
+    detector = AtSixteenPercent(bottoms_at={T0 + 2 * H, T0 + 6 * H})
+
+    result = run(candles, detector)
+
+    assert result.reversal == 0.16
+    assert result.turning_points == find_turning_points(candles, 0.16)
+    assert [(p.kind, p.time, p.price) for p in result.turning_points] == [
+        (Kind.TOP, T0, 100.0),
+        (Kind.BOTTOM, T0 + 6 * H, 80.0),
+    ]
+    assert len(find_turning_points(candles, 0.08)) == 4, "the 8% route sees two more"
+    # The mark at hour 2 would be the hit of the 8% bottom at 90; at 16% there is no bottom
+    # near it, so it is a false mark, and only the mark at hour 6 is a hit.
+    assert [(m.time, m.hit) for m in result.marks] == [(T0 + 2 * H, False), (T0 + 6 * H, True)]
+    assert (result.score.turning_points, result.score.hits, result.score.false_marks) == (2, 1, 1)
