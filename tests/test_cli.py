@@ -125,9 +125,11 @@ def test_replay_prints_the_floor_score_and_writes_the_chart_data(
     data = json.loads(out.read_text())
     assert data["detector"] == "floor"
     assert data["timeframe"] == "1h"
+    assert data["reversal"] == 0.08
     assert set(data) == {
         "detector",
         "timeframe",
+        "reversal",
         "scored_from",
         "candles",
         "turning_points",

@@ -158,6 +158,7 @@ def test_turning_points_are_served_on_the_hourly_candles(harness_client: TestCli
 
     assert body == {
         "timeframe": "1h",
+        "reversal": 0.08,
         "turning_points": [
             {
                 "kind": "bottom",
@@ -179,6 +180,36 @@ def test_turning_points_are_served_on_the_hourly_candles(harness_client: TestCli
             },
         ],
     }
+
+
+def test_turning_points_can_be_asked_for_at_another_reversal_size(
+    harness_client: TestClient,
+) -> None:
+    # The rise from 90 to 100 is 11%: three turning points at 8%, none at 16%.
+    body = harness_client.get(
+        "/turning-points", params={"timeframe": "1h", "reversal": 0.16}
+    ).json()
+
+    assert body == {"timeframe": "1h", "reversal": 0.16, "turning_points": []}
+    assert (
+        len(
+            harness_client.get(
+                "/turning-points", params={"timeframe": "1h", "reversal": 0.08}
+            ).json()["turning_points"]
+        )
+        == 3
+    )
+
+
+def test_a_reversal_size_outside_the_open_unit_interval_is_rejected(
+    harness_client: TestClient,
+) -> None:
+    for reversal in (0, 1, -0.08, "big"):
+        response = harness_client.get(
+            "/turning-points", params={"timeframe": "1h", "reversal": reversal}
+        )
+
+        assert response.status_code == 422, reversal
 
 
 def test_on_four_hour_candles_a_turning_point_sits_on_the_candle_holding_the_hour(
@@ -262,6 +293,7 @@ def test_a_replay_answers_candles_turning_points_marks_and_score(
     assert body["levels"] == []  # the floor reads no levels
     assert body["swing_extremes"] == []  # and tracks no swing
     assert body["timeframe"] == "1h"
+    assert body["reversal"] == 0.08, "the turning points shown are those of the floor's 8%"
     assert body["scored_from"] == 1451606400
 
 
