@@ -16,6 +16,14 @@ export interface Candle {
 	trades: number;
 }
 
+/** The hindsight turning points of the development period and the reversal size they were
+ * found at: 8% unless another was asked for. */
+export interface TurningPoints {
+	timeframe: Timeframe;
+	reversal: number;
+	turning_points: TurningPoint[];
+}
+
 /** A top or a bottom found in hindsight, on the candle of the requested timeframe. */
 export interface TurningPoint {
 	kind: Kind;
@@ -196,6 +204,9 @@ export interface Replay {
 	detector: string;
 	/** The timeframe of `candles`: what the detector read. */
 	timeframe: Timeframe;
+	/** The reversal size of the detector's family, as a fraction: `turning_points` and the
+	 * score are at it (ADR-0009). */
+	reversal: number;
 	/** Start of the scored period; marks before it are unscored. */
 	scored_from: number | null;
 	/** Every candle the detector read, oldest first: the whole development period. */
@@ -231,12 +242,10 @@ export async function fetchCandles(timeframe: Timeframe): Promise<Candle[]> {
 	return body.candles;
 }
 
-/** The hindsight turning points of the development period, on the timeframe's candles. */
-export async function fetchTurningPoints(timeframe: Timeframe): Promise<TurningPoint[]> {
-	const body = await get<{ turning_points: TurningPoint[] }>(
-		`/turning-points?timeframe=${timeframe}`
-	);
-	return body.turning_points;
+/** The hindsight turning points of the development period, on the timeframe's candles, at
+ * the 8% the hindsight route keeps; a picker for another size is a later issue. */
+export async function fetchTurningPoints(timeframe: Timeframe): Promise<TurningPoints> {
+	return get<TurningPoints>(`/turning-points?timeframe=${timeframe}`);
 }
 
 /** The development period replayed through a detector, scored over the scoring period: candles, levels, swing extremes, marks, outcomes, score per era; with a strategy, its fills and score too. */

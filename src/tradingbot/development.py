@@ -13,9 +13,13 @@ from __future__ import annotations
 from tradingbot.candles import Candle
 from tradingbot.store import CandleStore
 
-OUT_OF_SAMPLE_BOUNDARY = 1_729_296_000
-"""2024-10-19T00:00:00Z, fixed in slice 2 (#11). Candles from this hour on are
-out of sample; the development period ends with the hour before it."""
+OUT_OF_SAMPLE_BOUNDARY = 1_735_689_600
+"""2025-01-01T00:00:00Z, moved here from 2024-10-19 by ADR-0009 (slice 10, #38) so
+the third era is the whole of 2022 to 2024; the two and a half months this adds
+were read once, in detector three's aggregate out-of-sample score on #28, and
+that caveat stands on record. Candles from this hour on are out of sample; the
+development period ends with the fifteen-minute candle before it,
+2024-12-31T23:45:00Z."""
 
 
 def development_end(end: int | None) -> int:

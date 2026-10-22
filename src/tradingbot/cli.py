@@ -1,6 +1,7 @@
 """The `tradingbot` command: import the archive, catch up, serve the API, replay a detector,
 re-score a recorded run (and a recorded backtest on it), check the hourly candles built from
-the fifteen-minute ones, run the one out-of-sample check, backtest a strategy."""
+the fifteen-minute ones, run the one out-of-sample check (with the flip for a detector of
+family three), backtest a strategy on a detector's recorded run."""
 
 from __future__ import annotations
 
@@ -23,13 +24,24 @@ from tradingbot.detectors import DETECTORS, Detector, DetectorThree
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY, read_development
 from tradingbot.hourly_check import check_hourly
 from tradingbot.kraken import REST_REACH, KrakenSpot
-from tradingbot.replay import ReplayResult, replay_all, run, score_replayed
+from tradingbot.replay import ReplayResult, run
 from tradingbot.scoring import HARNESS_ADR, SCORING_START, describe_score
 from tradingbot.store import STORED_TIMEFRAMES, CandleStore
 from tradingbot.strategies import STRATEGIES, Strategy
 from tradingbot.sync import catch_up, import_archive
 
 DEFAULT_DB = "data/candles.sqlite"
+
+RECORDED_BACKTESTS = {(DetectorThree.name, "flip"): "backtest-flip.json"}
+"""The chart data of the backtests recorded before slice 10, by detector and strategy: the
+flip's one run on detector three (#32) keeps slice 9's name. Every later backtest is named
+`backtest-<detector>-<strategy>.json`."""
+
+
+def backtest_path(db: Path, detector: str, strategy: str) -> Path:
+    """Where the chart data of `strategy`'s backtest on `detector` lives next to the store."""
+    name = RECORDED_BACKTESTS.get((detector, strategy), f"backtest-{detector}-{strategy}.json")
+    return db.parent / name
 
 
 def describe(store: CandleStore) -> str:
@@ -84,7 +96,9 @@ def report(result: ReplayResult, period: str) -> str:
         f"Replayed {result.detector} over {span(result.candles)}, scored {period}: "
         f"{span(result.scored_candles)}."
     )
-    lines = [f"  {label:<16} {value}" for label, value in describe_score(result.score)]
+    lines = [
+        f"  {label:<16} {value}" for label, value in describe_score(result.score, result.reversal)
+    ]
     return "\n".join([heading, *lines])
 
 
@@ -175,7 +189,7 @@ def run_re_score(
             scored = re_score.re_score(re_score.RecordedRun.read(recorded), detector)
             strategy_scored = None
         else:
-            recorded_backtest = recorded_backtest or db.parent / f"backtest-{strategy.name}.json"
+            recorded_backtest = recorded_backtest or backtest_path(db, detector.name, strategy.name)
             strategy_scored = re_score.re_score_backtest(
                 re_score.RecordedRun.read(recorded),
                 re_score.RecordedBacktest.read(recorded_backtest),
@@ -199,12 +213,15 @@ def run_re_score(
         print(report_backtest(strategy_scored.result, scored.result))
 
 
-def run_backtest(db: Path, name: str, recorded: Path | None, out: Path | None) -> None:
-    """The strategy over detector three's replay of the store, checked against the recorded
-    run of detector three: the marks must be the recorded ones (ADR-0004)."""
+def run_backtest(
+    db: Path, name: str, detector_name: str, recorded: Path | None, out: Path | None
+) -> None:
+    """The strategy over a detector's recorded run: the run's own candles replayed through
+    the detector, as `re-score` does, and refused unless the marks are the recorded ones
+    (ADR-0004); so the backtest runs on the one recorded run whatever the store holds now."""
     strategy = strategy_named(name)
-    detector = DetectorThree()
-    out = out or db.parent / f"backtest-{name}.json"
+    detector = detector_named(detector_name)
+    out = out or backtest_path(db, detector.name, strategy.name)
     if out.exists():
         sys.exit(
             f"{out} exists and holds a recorded backtest, which is never replaced (ADR-0004). "
@@ -217,17 +234,15 @@ def run_backtest(db: Path, name: str, recorded: Path | None, out: Path | None) -
             f"{detector.name}, whose marks it must reproduce. Run `replay {detector.name}` "
             "first, or pass --recorded."
         )
-    candles = read_development_candles(db, detector)
-    replayed = replay_all(candles, detector)
     try:
-        re_score.check_marks(replayed, re_score.RecordedRun.read(recorded), detector)
+        scored = re_score.re_score(re_score.RecordedRun.read(recorded), detector)
     except re_score.Refused as refused:
         sys.exit(str(refused))
-    result = score_replayed(replayed, score_from=SCORING_START)
+    result = scored.result
     if not result.scored_candles:
         sys.exit(
             f"No candle falls in the scoring period, which starts at {iso(SCORING_START)}; "
-            "the development candles end before it."
+            "the recorded run ends before it."
         )
     tested = backtest(result, strategy)
     print(report_backtest(tested, result))
@@ -273,17 +288,28 @@ def run_check_hourly(db: Path) -> None:
     )
 
 
-def run_out_of_sample(db: Path, name: str, out: Path | None) -> None:
+def run_out_of_sample(db: Path, name: str, strategy_name: str | None, out: Path | None) -> None:
+    """The one check past the boundary; with a strategy, the flip on a detector of family
+    three (ADR-0009), its chart data goes next to the replay's with the strategy's name
+    appended."""
     detector = detector_named(name)
+    strategy = None if strategy_name is None else strategy_named(strategy_name)
     log = Path(out_of_sample.DEFAULT_LOG)
     try:
         with CandleStore(db, detector.timeframe) as store:
-            result = out_of_sample.check(store, detector, log, now=int(time.time()))
+            checked = out_of_sample.check(store, detector, log, int(time.time()), strategy)
     except out_of_sample.Refused as refused:
         sys.exit(str(refused))
-    print(report(result, "out of sample"))
+    print(report(checked.replay, "out of sample"))
+    if checked.backtest is not None:
+        print(report_backtest(checked.backtest, checked.replay))
     print(f"Logged this run in {log}.")
-    write_chart_data(result, out or db.parent / f"out-of-sample-{name}.json")
+    out = out or db.parent / f"out-of-sample-{name}.json"
+    write_chart_data(checked.replay, out)
+    if checked.backtest is not None:
+        write_chart_data(
+            checked.backtest, out.with_name(f"{out.stem}-{checked.backtest.strategy}.json")
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -366,8 +392,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "the recorded backtest's chart data "
-            "(default: backtest-<strategy>.json next to the store)"
+            "the recorded backtest's chart data (default: backtest-<detector>-<strategy>.json "
+            "next to the store; backtest-flip.json for the flip on three, slice 9's name)"
         ),
     )
     commands.add_parser(
@@ -388,11 +414,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     checker.add_argument("detector", help=f"detector name: {', '.join(DETECTORS)}")
     checker.add_argument(
+        "--strategy",
+        default=None,
+        help=(
+            "also walk this strategy over the replay from the boundary on, the account starting "
+            "there, and judge it over the period as one (ADR-0009); its chart data goes to "
+            f"out-of-sample-<detector>-<strategy>.json: {', '.join(STRATEGIES)}"
+        ),
+    )
+    checker.add_argument(
         "--out",
         type=Path,
         default=None,
         help=(
-            "JSON file for the chart data "
+            "JSON file for the replay's chart data "
             "(default: out-of-sample-<detector>.json next to the store)"
         ),
     )
@@ -400,23 +435,31 @@ def build_parser() -> argparse.ArgumentParser:
         "backtest",
         parents=[common],
         help=(
-            "run a strategy over detector three's replay of the development period with a "
-            "notional account under both cost models, print its score over the scoring period, "
-            "write chart data; refuses unless the marks are those of the recorded run"
+            "run a strategy over a detector's recorded run with a notional account under both "
+            "cost models, print its score over the scoring period, write chart data; refuses "
+            "unless the marks are those of the recorded run"
         ),
     )
     tester.add_argument("strategy", help=f"strategy name: {', '.join(STRATEGIES)}")
     tester.add_argument(
+        "--detector",
+        default=DetectorThree.name,
+        help=f"the detector whose recorded run to walk: {', '.join(DETECTORS)} (default: three)",
+    )
+    tester.add_argument(
         "--recorded",
         type=Path,
         default=None,
-        help="detector three's recorded run (default: replay-three.json next to the store)",
+        help="the detector's recorded run (default: replay-<detector>.json next to the store)",
     )
     tester.add_argument(
         "--out",
         type=Path,
         default=None,
-        help="JSON file for the chart data (default: backtest-<strategy>.json next to the store)",
+        help=(
+            "JSON file for the chart data (default: backtest-<detector>-<strategy>.json next to "
+            "the store; backtest-flip.json for the flip on three, slice 9's name)"
+        ),
     )
     return parser
 
@@ -439,6 +482,6 @@ def main(argv: list[str] | None = None) -> None:
         case "check-hourly":
             run_check_hourly(args.db)
         case "out-of-sample":
-            run_out_of_sample(args.db, args.detector, args.out)
+            run_out_of_sample(args.db, args.detector, args.strategy, args.out)
         case "backtest":
-            run_backtest(args.db, args.strategy, args.recorded, args.out)
+            run_backtest(args.db, args.strategy, args.detector, args.recorded, args.out)

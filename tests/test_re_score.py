@@ -73,7 +73,32 @@ def test_the_recorded_run_of_detector_three_scores_six_and_a_half_false_marks_pe
 
     assert (scored.result.score.hits, scored.result.score.false_marks) == (719, 4698)
     assert round(scored.result.score.false_marks_per_hit, 1) == 6.5
-    assert ("false marks/hit", "6.5 per hit") in describe_score(scored.result.score)
+    assert ("false marks/hit", "6.5 per hit") in describe_score(scored.result.score, reversal=0.08)
+
+
+RECORDED_HOURLY = {
+    "floor": (259, 2921),
+    "one": (313, 6049),
+    "two": (135, 1522),
+}
+"""Hits and false marks over the scoring period of the three family-one runs, as re-scored
+under ADR-0007 on #11, #12 and #16; unchanged by slice 10, since nothing in their
+definitions changed (ADR-0009)."""
+
+
+@pytest.mark.parametrize(("name", "expected"), sorted(RECORDED_HOURLY.items()))
+def test_the_recorded_hourly_runs_re_score_to_their_recorded_numbers(
+    name: str, expected: tuple[int, int]
+) -> None:
+    recorded = RECORDED_THREE.with_name(f"replay-{name}.json")
+    if not recorded.exists():
+        pytest.skip(f"{recorded} is not on disk")
+
+    scored = re_score(RecordedRun.read(recorded), _named(name))
+
+    assert (scored.result.score.hits, scored.result.score.false_marks) == expected
+    assert scored.result.score.turning_points == 798
+    assert scored.result.reversal == 0.08
 
 
 def test_re_scoring_refuses_another_detectors_run(tmp_path: Path) -> None:

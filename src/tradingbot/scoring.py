@@ -137,11 +137,18 @@ def describe_per_hit(score: Score) -> str:
     return f"{score.false_marks_per_hit:.1f} per hit"
 
 
-def describe_score(score: Score) -> list[tuple[str, str]]:
+def describe_reversal(reversal: float) -> str:
+    """A reversal size as the commands print it: `8%`, `12.5%`."""
+    return f"{reversal * 100:g}%"
+
+
+def describe_score(score: Score, reversal: float) -> list[tuple[str, str]]:
     """The score as (label, value) pairs, in the order the commands print them: the
-    period's numbers one per line, then one line per era."""
+    reversal size the turning points were found at as the header line, the period's
+    numbers one per line, then one line per era."""
     timing, give_up_ = describe_timing(score)
     lines = [
+        ("reversal size", describe_reversal(reversal)),
         ("turning points", str(score.turning_points)),
         ("marks", str(score.marks)),
         ("hits", f"{score.hits}  (hit rate {score.hit_rate:.1%})"),

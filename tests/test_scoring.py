@@ -320,9 +320,10 @@ def test_describe_score_prints_the_false_marks_per_hit_after_the_false_mark_rate
         median_give_up=1.5,
     )
 
-    lines = describe_score(whole)
+    lines = describe_score(whole, reversal=0.08)
 
     assert [label for label, _ in lines] == [
+        "reversal size",
         "turning points",
         "marks",
         "hits",
@@ -331,10 +332,18 @@ def test_describe_score_prints_the_false_marks_per_hit_after_the_false_mark_rate
         "median timing",
         "median give-up",
     ]
-    assert lines[3:5] == [
+    assert lines[4:6] == [
         ("false marks", "2  (false-mark rate 50.0%)"),
         ("false marks/hit", "1.0 per hit"),
     ]
+
+
+def test_describe_score_opens_with_the_reversal_size_the_turning_points_were_found_at() -> None:
+    whole = Score(3, 4, 2, 2, 2 / 3, 0.5, 1.0, 0.5, 1.5)
+
+    assert describe_score(whole, reversal=0.08)[0] == ("reversal size", "8%")
+    assert describe_score(whole, reversal=0.16)[0] == ("reversal size", "16%")
+    assert describe_score(whole, reversal=0.125)[0] == ("reversal size", "12.5%")
 
 
 def test_describe_score_rounds_the_false_marks_per_hit_to_one_decimal() -> None:
@@ -351,15 +360,15 @@ def test_describe_score_rounds_the_false_marks_per_hit_to_one_decimal() -> None:
         median_give_up=1.31,
     )
 
-    assert ("false marks/hit", "6.5 per hit") in describe_score(recorded)
+    assert ("false marks/hit", "6.5 per hit") in describe_score(recorded, reversal=0.08)
 
 
 def test_describe_score_says_n_a_for_a_period_with_marks_but_no_hits() -> None:
     only_false = score(match_marks(flat_series(100), [Mark(Kind.TOP, at(40), price=90.0)], []))
     nothing = score(match_marks(flat_series(100), [], []))
 
-    assert ("false marks/hit", "n/a (no hits)") in describe_score(only_false)
-    assert ("false marks/hit", "0.0 per hit") in describe_score(nothing)
+    assert ("false marks/hit", "n/a (no hits)") in describe_score(only_false, reversal=0.08)
+    assert ("false marks/hit", "0.0 per hit") in describe_score(nothing, reversal=0.08)
 
 
 def test_describe_score_prints_one_line_per_era() -> None:
@@ -395,10 +404,10 @@ def test_describe_score_prints_one_line_per_era() -> None:
         eras=(EraScore(ERAS[0], era),),
     )
 
-    lines = describe_score(scored)
+    lines = describe_score(scored, reversal=0.08)
 
-    assert lines[:7] == describe_score(whole)
-    assert lines[7] == (
+    assert lines[:8] == describe_score(whole, reversal=0.08)
+    assert lines[8] == (
         "2016-2018",
         "2 turning points, 1 marks, 1 hits (hit rate 50.0%), 0 false marks (false-mark rate 0.0%), "
         "0.0 per hit, median timing +2.0 candles (late), median give-up 1.00%",
@@ -412,11 +421,12 @@ def test_an_era_line_says_n_a_for_marks_but_no_hits() -> None:
     ]
 
     lines = describe_score(
-        score(match_marks(candles, [Mark(Kind.TOP, in_era(first, 5), 100.0)], []), ERAS)
+        score(match_marks(candles, [Mark(Kind.TOP, in_era(first, 5), 100.0)], []), ERAS),
+        reversal=0.08,
     )
 
-    assert lines[7][0] == "2016-2018"
-    assert "1 false marks (false-mark rate 100.0%), n/a (no hits), median timing" in lines[7][1]
+    assert lines[8][0] == "2016-2018"
+    assert "1 false marks (false-mark rate 100.0%), n/a (no hits), median timing" in lines[8][1]
 
 
 def test_a_score_without_eras_has_none() -> None:

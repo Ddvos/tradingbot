@@ -6,14 +6,16 @@ daily ones resampled from the hourly table. `from` and `to` are Unix seconds or
 ISO 8601 and are widened to whole periods, so a resampled candle is always
 built from every hour it covers. `GET /turning-points?timeframe=...` answers
 the hindsight turning points of the whole development period, always found on
-the hourly candles, placed on the candle of the requested timeframe that holds
-the extreme. `GET /replay?detector=...` replays the development period through
-a detector, on the candles of the detector's timeframe, and answers every
-candle it read, the levels and the swing extremes it read, every mark with its
-outcome where the scoring period scored it, and the score over the scoring
-period, per era. With `&strategy=...` it also walks that strategy over the
-replay and answers, under `backtest`, its fills and its score under both cost
-models (ADR-0008); without, the answer is unchanged and has no `backtest`.
+the hourly candles, at 8% unless `&reversal=` asks for another size, placed on
+the candle of the requested timeframe that holds the extreme. `GET
+/replay?detector=...` replays the development period through a detector, on
+the candles of the detector's timeframe, and answers the reversal size of the
+detector's family, every candle it read, the turning points at that size, the
+levels and the swing extremes it read, every mark with its outcome where the
+scoring period scored it, and the score over the scoring period, per era.
+With `&strategy=...` it also walks that strategy over the replay and answers,
+under `backtest`, its fills and its score under both cost models (ADR-0008);
+without, the answer is unchanged and has no `backtest`.
 
 Every route reads through `read_development`, so nothing past the
 out-of-sample boundary is ever served.
@@ -44,7 +46,7 @@ from tradingbot.replay import MarkOutcome, ReplayResult, run
 from tradingbot.scoring import SCORING_START, Score
 from tradingbot.store import STORED_TIMEFRAMES, CandleStore
 from tradingbot.strategies import STRATEGIES
-from tradingbot.turning_points import Kind, TurningPoint, find_turning_points
+from tradingbot.turning_points import REVERSAL_SIZE, Kind, TurningPoint, find_turning_points
 
 
 class CandlesOut(BaseModel):
@@ -54,6 +56,8 @@ class CandlesOut(BaseModel):
 
 class TurningPointsOut(BaseModel):
     timeframe: str
+    reversal: float
+    """The reversal size the turning points were found at."""
     turning_points: list[TurningPoint]
 
 
@@ -92,6 +96,8 @@ class ReplayOut(BaseModel):
     detector: str
     timeframe: str
     """The timeframe of `candles`: what the detector read."""
+    reversal: float
+    """The reversal size of the detector's family: `turning_points` and the score are at it."""
     scored_from: int | None
     """Start of the scored period; marks before it are unscored."""
     candles: list[Candle]
@@ -106,6 +112,7 @@ class ReplayOut(BaseModel):
         return cls(
             detector=result.detector,
             timeframe=result.timeframe.value,
+            reversal=result.reversal,
             scored_from=result.scored_from,
             candles=result.candles,
             turning_points=result.turning_points,
@@ -204,14 +211,17 @@ def create_app(db_path: str | Path) -> FastAPI:
         return CandlesOut(timeframe=timeframe.value, candles=result)
 
     @app.get("/turning-points")
-    def turning_points(timeframe: Timeframe) -> TurningPointsOut:
-        points = find_turning_points(read())
+    def turning_points(
+        timeframe: Timeframe,
+        reversal: float = Query(default=REVERSAL_SIZE, gt=0, lt=1),
+    ) -> TurningPointsOut:
+        points = find_turning_points(read(), reversal)
         if timeframe is Timeframe.M15:
             by_time = {c.time: c for c in read(Timeframe.M15)}
             placed = [on_fifteen_minutes(p, by_time) for p in points]
         else:
             placed = [on_timeframe(p, timeframe) for p in points]
-        return TurningPointsOut(timeframe=timeframe.value, turning_points=placed)
+        return TurningPointsOut(timeframe=timeframe.value, reversal=reversal, turning_points=placed)
 
     @app.get("/replay")
     def replay(detector: str, strategy: str | None = None) -> BacktestedOut | ReplayOut:

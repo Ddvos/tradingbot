@@ -130,6 +130,7 @@ class Scripted:
 
     name = "scripted"
     timeframe = Timeframe.H1
+    reversal = 0.08
 
     def __init__(self, marks: dict[int, Kind]) -> None:
         self._marks = marks
@@ -490,3 +491,19 @@ def test_a_change_of_position_is_placed_only_while_the_latest_mark_is_in_the_sco
             run(zigzag(), Scripted(SCRIPT), score_from=SCORING_START), AlwaysLong()
         ).fills
     ] == [at(5)]
+
+
+def test_without_eras_the_bar_is_judged_over_the_period_as_one() -> None:
+    # The out-of-sample check (ADR-0009): no eras, growth at least the benchmark's over the
+    # whole period under the perpetual cost model.
+    result = run(zigzag(), Scripted(SCRIPT), score_from=SCORING_START)
+
+    bt = backtest(result, Flip(), eras=())
+
+    assert bt.scores[1].score.eras == ()
+    assert bt.passes is True
+    assert describe_verdict(bt) == (
+        "bar (ADR-0009)",
+        "growth at least the benchmark's over the period as one under the perpetual cost "
+        "model: pass (×1.28 vs ×0.992)",
+    )
