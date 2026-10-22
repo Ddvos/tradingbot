@@ -275,6 +275,15 @@
 		];
 	}
 
+	/** Green when the span's growth is at least the benchmark's, red below: the bar of
+	 * ADR-0008, judged per era under the perpetual. */
+	const vsBenchmark = (s: StrategyScore): Cell['tone'] =>
+		s.growth === null || s.benchmark_growth === null
+			? undefined
+			: s.growth >= s.benchmark_growth
+				? 'above'
+				: 'below';
+
 	/** A strategy's score under one cost model as rows. Growth reads green at or above the
 	 * benchmark's and red below it: the bar of ADR-0008, judged per era under the perpetual. */
 	function strategyRows(score: StrategyScore): Row[] {
@@ -290,12 +299,6 @@
 			group: options.group,
 			cells: scores.map((s) => ({ text: text(s), tone: options.tone?.(s) }))
 		});
-		const vsBenchmark = (s: StrategyScore): Cell['tone'] =>
-			s.growth === null || s.benchmark_growth === null
-				? undefined
-				: s.growth >= s.benchmark_growth
-					? 'above'
-					: 'below';
 		const outcome = (hit: boolean) => (hit ? 'hit' : 'false');
 		const groupCell = (s: StrategyScore, i: number) => {
 			const g = s.groups[i];
@@ -355,6 +358,87 @@
 		];
 	}
 
+	const day = (seconds: number) => utc(seconds).slice(0, 10);
+	/** Dollars as a person reads them: whole dollars from 100 up, cents below. */
+	const dollars = (value: number) =>
+		value >= 100
+			? value.toLocaleString('en-US', { maximumFractionDigits: 0 })
+			: value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	/** A growth as the change it is: ×0.82 is −18%, ×2.43 is +143%. */
+	const change = (growth: number | null) =>
+		growth === null
+			? 'n/a'
+			: `${growth >= 1 ? '+' : '−'}${Math.abs((growth - 1) * 100).toFixed(0)}%`;
+	/** The value of a series at the last hourly close before `end`; null when there is none. */
+	function valueBefore(times: number[], values: number[], end: number): number | null {
+		let low = 0;
+		let high = times.length;
+		while (low < high) {
+			const mid = (low + high) >> 1;
+			if (times[mid] < end) low = mid + 1;
+			else high = mid;
+		}
+		return low === 0 ? null : values[low - 1];
+	}
+	/** Whether the detector's hit rate is at least 80% in every era (ADR-0005). */
+	const detectorPasses = (score: Score) =>
+		score.eras.length > 0 && score.eras.every((e) => e.score.hit_rate >= 0.8);
+	const giveUp = (score: Score) =>
+		score.median_give_up === null ? '' : `, its hits a median ${score.median_give_up.toFixed(2)}% from the extreme`;
+
+	/** What the 500 USD became: the account under each cost model and the benchmark at the
+	 * last hourly close of every era and of the period, with the change over that span, then
+	 * the trades and what they cost. The short view; the full tables sit behind it. */
+	function summaryRows(backtest: Backtest): Row[] {
+		const { times, benchmark, accounts } = backtest.values;
+		const spans = (score: StrategyScore) => [
+			...score.eras.map((e) => ({ end: e.era.end, score: e.score })),
+			{ end: Infinity, score }
+		];
+		const money = (values: number[], end: number, growth: number | null) => {
+			const value = valueBefore(times, values, end);
+			return value === null ? 'n/a' : `${dollars(value)} USD · ${change(growth)}`;
+		};
+		const rows: Row[] = perpetualFirst(backtest.scores).map((scored) => ({
+			label: `account, ${scored.model}`,
+			title:
+				`What the 500 USD became under the ${scored.model} cost model at the end of each era and of the period, and the change over that span. ` +
+				(scored.model === 'perpetual'
+					? 'Green: at least what holding gave over the span, the bar of ADR-0008; red: less.'
+					: 'Reported next to the perpetual; the bar is not judged under spot.'),
+			cells: spans(scored.score).map(({ end, score }) => ({
+				text: money(accounts[scored.model], end, score.growth),
+				tone: vsBenchmark(score)
+			}))
+		}));
+		const first = backtest.scores[0].score;
+		rows.push({
+			label: 'holding Bitcoin instead',
+			title:
+				'The benchmark: 500 USD of Bitcoin bought at the first candle of the scoring period with one spot fill and held.',
+			cells: spans(first).map(({ end, score }) => ({
+				text: money(benchmark, end, score.benchmark_growth)
+			}))
+		});
+		rows.push({
+			label: 'trades',
+			title: 'Round trips opened in the span.',
+			cells: spans(first).map(({ score }) => ({ text: String(score.trades) })),
+			group: true
+		});
+		const perpetual = backtest.scores.find((s) => s.model === 'perpetual');
+		if (perpetual !== undefined) {
+			rows.push({
+				label: 'fees and funding, perpetual',
+				title: 'What those trades cost under the perpetual cost model, in USD.',
+				cells: spans(perpetual.score).map(({ score }) => ({
+					text: `${dollars(score.fees + score.funding)} USD`
+				}))
+			});
+		}
+		return rows;
+	}
+
 	/** The perpetual's table first, since the bar is judged under it. */
 	const perpetualFirst = (scores: CostModelScore[]) => [
 		...scores.filter((s) => s.model === 'perpetual'),
@@ -372,10 +456,8 @@
 				e.score.benchmark_growth !== null &&
 				e.score.growth < e.score.benchmark_growth
 		);
-		const detail = short
-			.map((e) => `${e.era.name} ${growth(e.score.growth)} vs ${growth(e.score.benchmark_growth)}`)
-			.join(', ');
-		return detail === '' ? 'fail' : `fail (${detail})`;
+		const detail = short.map((e) => e.era.name).join(', ');
+		return detail === '' ? 'fail' : `fail: below holding in ${detail}`;
 	}
 </script>
 
@@ -494,32 +576,57 @@
 	</header>
 	{#if mode === 'replay' && replay && total > 0}
 		<div class="score">
-			<div class="tables">
-				<ScoreTable
-					caption="{replay.detector} on {replay.timeframe} candles over the scoring period"
-					columns={columns(replay.score.eras)}
-					rows={detectorRows(replay.score)}
-				/>
-			</div>
+			<p class="summary">
+				<strong>{replay.detector}</strong> found {replay.score.hits} of {replay.score.turning_points}
+				turning points ({percent(replay.score.hit_rate)}; per era {replay.score.eras
+					.map((e) => percent(e.score.hit_rate))
+					.join(', ')}) and placed {replay.score.false_marks_per_hit.toFixed(1)} false marks for every
+				hit{giveUp(replay.score)}. <strong>Bar (ADR-0005)</strong>, at least 80% in every era:
+				<strong class={detectorPasses(replay.score) ? 'pass' : 'fail'}
+					>{detectorPasses(replay.score) ? 'pass' : 'fail'}</strong
+				>
+			</p>
 			{#if replay.backtest}
-				<p class="verdict">
-					<strong>{replay.backtest.strategy}</strong> on {replay.backtest.detector}: an account of 500
-					USD from {utc(replay.backtest.scored_from)}, all in or flat. <strong>Bar (ADR-0008)</strong>,
-					growth at least the benchmark's in every era under the perpetual cost model:
+				<p class="summary">
+					<strong>{replay.backtest.strategy}</strong> on {replay.backtest.detector}: 500 USD from
+					{day(replay.backtest.scored_from)} to {day(
+						replay.backtest.values.times[replay.backtest.values.times.length - 1]
+					)}, where the stored development data ends (later candles are kept for out-of-sample
+					checks). <strong>Bar (ADR-0008)</strong>, at least what holding gave in every era under the
+					perpetual cost model:
 					<strong class={replay.backtest.passes ? 'pass' : 'fail'}>{verdict(replay.backtest)}</strong>
 				</p>
 				<div class="tables">
-					{#each perpetualFirst(replay.backtest.scores) as scored (scored.model)}
-						<ScoreTable
-							caption="under the {scored.model} cost model{scored.model === 'perpetual'
-								? ' (the bar)'
-								: ' (reported, no bar)'}"
-							columns={columns(scored.score.eras)}
-							rows={strategyRows(scored.score)}
-						/>
-					{/each}
+					<ScoreTable
+						caption="what the 500 USD became"
+						columns={columns(replay.backtest.scores[0].score.eras)}
+						rows={summaryRows(replay.backtest)}
+					/>
 				</div>
 			{/if}
+			<details>
+				<summary>every number, as the batch commands print them</summary>
+				<div class="tables">
+					<ScoreTable
+						caption="{replay.detector} on {replay.timeframe} candles over the scoring period"
+						columns={columns(replay.score.eras)}
+						rows={detectorRows(replay.score)}
+					/>
+				</div>
+				{#if replay.backtest}
+					<div class="tables">
+						{#each perpetualFirst(replay.backtest.scores) as scored (scored.model)}
+							<ScoreTable
+								caption="under the {scored.model} cost model{scored.model === 'perpetual'
+									? ' (the bar)'
+									: ' (reported, no bar)'}"
+								columns={columns(scored.score.eras)}
+								rows={strategyRows(scored.score)}
+							/>
+						{/each}
+					</div>
+				{/if}
+			</details>
 		</div>
 	{/if}
 	{#if mode === 'hindsight'}
@@ -626,21 +733,6 @@
 	}
 	.status,
 	.score,
-	.tables {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px 32px;
-		align-items: flex-start;
-	}
-	.verdict {
-		margin: 10px 0 6px;
-	}
-	.pass {
-		color: #2e7d32;
-	}
-	.fail {
-		color: #c62828;
-	}
 	.legend {
 		margin: 0;
 		color: #666;
@@ -648,6 +740,32 @@
 	}
 	.score {
 		margin-bottom: 12px;
+	}
+	.tables {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 32px;
+		align-items: flex-start;
+	}
+	.summary {
+		margin: 0 0 6px;
+		color: #333;
+	}
+	details {
+		margin-top: 6px;
+	}
+	summary {
+		cursor: pointer;
+		color: #666;
+	}
+	details .tables {
+		margin-top: 8px;
+	}
+	.pass {
+		color: #2e7d32;
+	}
+	.fail {
+		color: #c62828;
 	}
 	.legend {
 		margin-top: 8px;
