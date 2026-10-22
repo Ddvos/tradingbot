@@ -13,7 +13,13 @@
 		type UTCTimestamp
 	} from 'lightweight-charts';
 	import type { Candle, TurningPoint } from '#lib/api.ts';
-	import { sameMarkers, toMarkers, type ChartLine, type ChartMark } from '#lib/chart.ts';
+	import {
+		sameMarkers,
+		toMarkers,
+		type ChartFill,
+		type ChartLine,
+		type ChartMark
+	} from '#lib/chart.ts';
 	import { LinesPrimitive } from '#lib/lines.ts';
 
 	let {
@@ -22,7 +28,8 @@
 		start = 0,
 		turningPoints = [],
 		lines = [],
-		marks = []
+		marks = [],
+		fills = []
 	}: {
 		candles: Candle[];
 		/** How many candles to show, oldest first; all of them when omitted. */
@@ -35,6 +42,8 @@
 		/** The lines to draw, levels and swing extremes, each from its first candle to its latest. */
 		lines?: ChartLine[];
 		marks?: ChartMark[];
+		/** The strategy's buys and sells, each on the candle it filled on. */
+		fills?: ChartFill[];
 	} = $props();
 
 	let container: HTMLDivElement;
@@ -117,7 +126,7 @@
 	let shownMarkers: SeriesMarker<Time>[] = [];
 
 	$effect(() => {
-		const wanted = toMarkers(turningPoints, marks);
+		const wanted = toMarkers(turningPoints, marks, fills);
 		if (!markers || sameMarkers(wanted, shownMarkers)) return;
 		markers.setMarkers(wanted);
 		shownMarkers = wanted;

@@ -98,6 +98,100 @@ export interface Score {
 	eras: EraScore[];
 }
 
+export type Side = 'buy' | 'sell';
+
+/** What one fill did to the account under one cost model. */
+export interface FillCost {
+	model: string;
+	/** Bitcoin bought or sold. */
+	size: number;
+	/** The fee paid, in USD. */
+	fee: number;
+	/** The account's value right after the fill, at the fill price. */
+	after: number;
+}
+
+/** One market order filled: a buy or a sell on the candle it filled on, at its open. */
+export interface Fill {
+	side: Side;
+	time: number;
+	/** That open moved 0.05% against the bot. */
+	price: number;
+	/** Time of the mark that caused the order: the latest mark at the close the strategy changed its mind on. */
+	mark: number;
+	costs: FillCost[];
+}
+
+/** The trades opened on a mark of one outcome and closed on a mark of another. */
+export interface TradeGroup {
+	opened_on_hit: boolean;
+	closed_on_hit: boolean;
+	trades: number;
+	/** Mean result in percent of the account's value at entry; null without trades. */
+	mean: number | null;
+	median: number | null;
+}
+
+/** How a strategy did over a period under one cost model (ADR-0008). */
+export interface StrategyScore {
+	/** The value at the period's last close over its value before the period; null without candles. */
+	growth: number | null;
+	benchmark_growth: number | null;
+	/** In percent of the peak; null without candles. */
+	worst_drawdown: number | null;
+	benchmark_worst_drawdown: number | null;
+	trades: number;
+	fees: number;
+	funding: number;
+	/** The share of the period's candles whose close found the account long. */
+	share_long: number;
+	/** Four groups: hit→hit, hit→false, false→hit, false→false (opened on → closed on). */
+	groups: TradeGroup[];
+	/** The first close at which a 20% drawdown halt would have fired; null when never. */
+	halt_at: number | null;
+	halt_episodes: number;
+	eras: EraStrategyScore[];
+}
+
+export interface EraStrategyScore {
+	era: Era;
+	score: StrategyScore;
+}
+
+export interface CostModelScore {
+	/** The cost model's name: 'spot' or 'perpetual'. */
+	model: string;
+	score: StrategyScore;
+}
+
+export interface CostModel {
+	name: string;
+	fee: number;
+	funding: number;
+}
+
+/** The account's value at every hourly close under each cost model, and the benchmark's. */
+export interface ValueSeries {
+	times: number[];
+	benchmark: number[];
+	accounts: Record<string, number[]>;
+}
+
+/** A strategy's backtest on the replay: its fills and its score under both cost models. */
+export interface Backtest {
+	detector: string;
+	strategy: string;
+	timeframe: Timeframe;
+	/** The first candle of the scoring period: when the account starts. */
+	scored_from: number;
+	cost_models: CostModel[];
+	fills: Fill[];
+	values: ValueSeries;
+	scores: CostModelScore[];
+	/** The bar of ADR-0008: growth at least the benchmark's in every era under the perpetual. */
+	passes: boolean;
+}
+
 export interface Replay {
 	detector: string;
 	/** The timeframe of `candles`: what the detector read. */
@@ -113,9 +207,12 @@ export interface Replay {
 	swing_extremes: SwingExtreme[];
 	marks: MarkOutcome[];
 	score: Score;
+	/** The strategy's backtest when one was asked for; absent otherwise. */
+	backtest?: Backtest;
 }
 
 export const DETECTORS = ['floor', 'one', 'two', 'three'];
+export const STRATEGIES = ['flip'];
 
 // Declared in src/env.ts; set PUBLIC_API_URL in dashboard/.env to read from somewhere else.
 const API_URL = PUBLIC_API_URL;
@@ -142,7 +239,9 @@ export async function fetchTurningPoints(timeframe: Timeframe): Promise<TurningP
 	return body.turning_points;
 }
 
-/** The development period replayed through a detector, scored over the scoring period: candles, levels, swing extremes, marks, outcomes, score per era. */
-export async function fetchReplay(detector: string): Promise<Replay> {
-	return get<Replay>(`/replay?detector=${encodeURIComponent(detector)}`);
+/** The development period replayed through a detector, scored over the scoring period: candles, levels, swing extremes, marks, outcomes, score per era; with a strategy, its fills and score too. */
+export async function fetchReplay(detector: string, strategy: string | null = null): Promise<Replay> {
+	const query = `detector=${encodeURIComponent(detector)}`;
+	const withStrategy = strategy === null ? query : `${query}&strategy=${encodeURIComponent(strategy)}`;
+	return get<Replay>(`/replay?${withStrategy}`);
 }

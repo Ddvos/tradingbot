@@ -450,3 +450,181 @@ def test_check_hourly_stops_without_fifteen_minute_candles(tmp_path: Path) -> No
         main(["check-hourly", "--db", str(db)])
 
     assert "15-minute" in str(stopped.value)
+
+
+# --- backtests -----------------------------------------------------------------------
+
+
+def quarter_db(path: Path) -> Path:
+    """600 hours of a seeded fifteen-minute walk in the 15m table: detector three marks it."""
+    from tests.walks import quarter_walk
+
+    db = path / "candles.sqlite"
+    with CandleStore(db, Timeframe.M15) as store:
+        store.upsert(quarter_walk(hours=600, seed=24))
+    return db
+
+
+def recorded_three(path: Path, db: Path, capsys: pytest.CaptureFixture[str]) -> Path:
+    recorded = path / "replay-three.json"
+    main(["replay", "three", "--db", str(db), "--out", str(recorded)])
+    capsys.readouterr()
+    return recorded
+
+
+def test_backtest_prints_the_flips_score_under_both_cost_models_and_writes_the_chart_data(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = quarter_db(tmp_path)
+    recorded = recorded_three(tmp_path, db, capsys)
+    out = tmp_path / "backtest-flip.json"
+
+    main(["backtest", "flip", "--db", str(db), "--recorded", str(recorded), "--out", str(out)])
+
+    printed = capsys.readouterr().out
+    assert "Backtested flip on three over 2314 candles from 2024-01-01T00:00:00Z" in printed
+    assert "the account from 2024-01-01T00:00:00Z: 2314 candles" in printed
+    assert " fills." in printed
+    assert "  under the spot cost model" in printed
+    assert "  under the perpetual cost model" in printed
+    for label in ("growth", "worst drawdown", "trades", "fees", "funding", "time long"):
+        assert f"    {label:<16} " in printed
+    assert "    hit→hit          " in printed and "    false→false      " in printed
+    assert "    20% halt         " in printed
+    assert "    2016-2018        no candles" in printed
+    assert "    2022-2024        growth ×" in printed
+    assert "  bar (ADR-0008)     growth at least the benchmark's in every era" in printed
+    assert f"Wrote the chart data to {out}." in printed
+    data = json.loads(out.read_text())
+    assert set(data) == {
+        "detector",
+        "strategy",
+        "timeframe",
+        "scored_from",
+        "cost_models",
+        "fills",
+        "values",
+        "scores",
+        "passes",
+    }
+    assert (data["detector"], data["strategy"], data["timeframe"]) == ("three", "flip", "15m")
+    assert data["scored_from"] == 1_451_606_400
+    assert [m["name"] for m in data["cost_models"]] == ["spot", "perpetual"]
+    assert len(data["fills"]) > 4
+    assert data["fills"][0]["side"] == "buy"
+    assert [c["model"] for c in data["fills"][0]["costs"]] == ["spot", "perpetual"]
+    assert [s["model"] for s in data["scores"]] == ["spot", "perpetual"]
+    assert [e["era"]["name"] for e in data["scores"][0]["score"]["eras"]] == [
+        "2016-2018",
+        "2019-2021",
+        "2022-2024",
+    ]
+    assert len(data["values"]["times"]) == 600
+    assert set(data["values"]["accounts"]) == {"spot", "perpetual"}
+    assert isinstance(data["passes"], bool)
+
+
+def test_backtest_never_overwrites_a_recorded_backtest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = quarter_db(tmp_path)
+    recorded = recorded_three(tmp_path, db, capsys)
+    out = tmp_path / "backtest-flip.json"
+    main(["backtest", "flip", "--db", str(db), "--recorded", str(recorded), "--out", str(out)])
+    capsys.readouterr()
+    written = out.read_text()
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["backtest", "flip", "--db", str(db), "--recorded", str(recorded), "--out", str(out)])
+
+    assert "backtest-flip.json" in str(stopped.value) and "recorded" in str(stopped.value)
+    assert out.read_text() == written
+
+
+def test_backtest_refuses_without_a_recorded_run_of_detector_three(tmp_path: Path) -> None:
+    db = quarter_db(tmp_path)
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["backtest", "flip", "--db", str(db), "--out", str(tmp_path / "out.json")])
+
+    assert "replay-three.json" in str(stopped.value)
+    assert not (tmp_path / "out.json").exists()
+
+
+def test_backtest_refuses_when_the_marks_differ_from_the_recorded_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = quarter_db(tmp_path)
+    recorded = recorded_three(tmp_path, db, capsys)
+    data = json.loads(recorded.read_text())
+    data["marks"] = data["marks"][1:]
+    recorded.write_text(json.dumps(data))
+    out = tmp_path / "backtest-flip.json"
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["backtest", "flip", "--db", str(db), "--recorded", str(recorded), "--out", str(out)])
+
+    assert "marks" in str(stopped.value) and "replay-three.json" in str(stopped.value)
+    assert "growth" not in capsys.readouterr().out
+    assert not out.exists()
+
+
+def test_backtest_refuses_an_unknown_strategy(tmp_path: Path) -> None:
+    db = quarter_db(tmp_path)
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["backtest", "oracle", "--db", str(db)])
+
+    assert "flip" in str(stopped.value)
+
+
+def test_re_score_with_a_strategy_reports_the_recorded_backtest_under_the_current_cost_models(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = quarter_db(tmp_path)
+    recorded = recorded_three(tmp_path, db, capsys)
+    out = tmp_path / "backtest-flip.json"
+    main(["backtest", "flip", "--db", str(db), "--recorded", str(recorded), "--out", str(out)])
+    first = capsys.readouterr().out
+    fills = len(json.loads(out.read_text())["fills"])
+
+    main(["re-score", "three", "--db", str(db), "--recorded", str(recorded), "--strategy", "flip"])
+
+    printed = capsys.readouterr().out
+    assert "Re-scored three under ADR-0007" in printed and "Replayed three over" in printed
+    assert (
+        f"Re-scored flip under ADR-0008: {fills} fills, identical in number and time to the "
+        f"recorded backtest in {out}." in printed
+    )
+    assert "Backtested flip on three over 2314 candles" in printed
+    assert printed.split("Backtested flip")[1].split("Wrote")[0].strip() in first
+
+
+def test_re_score_with_a_strategy_refuses_when_the_fills_differ(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = quarter_db(tmp_path)
+    recorded = recorded_three(tmp_path, db, capsys)
+    out = tmp_path / "backtest-flip.json"
+    main(["backtest", "flip", "--db", str(db), "--recorded", str(recorded), "--out", str(out)])
+    capsys.readouterr()
+    data = json.loads(out.read_text())
+    data["fills"] = data["fills"][:-1]
+    out.write_text(json.dumps(data))
+
+    with pytest.raises(SystemExit) as stopped:
+        main(
+            [
+                "re-score",
+                "three",
+                "--db",
+                str(db),
+                "--recorded",
+                str(recorded),
+                "--strategy",
+                "flip",
+            ]
+        )
+
+    assert "fills" in str(stopped.value) and "backtest-flip.json" in str(stopped.value)
+    assert "growth" not in capsys.readouterr().out
