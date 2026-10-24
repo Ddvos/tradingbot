@@ -2,7 +2,7 @@
 
 A bot that finds Bitcoin's turning points on a chart and, once it does that well, trades them with real money on Kraken. The vocabulary is in `GLOSSARY.md`; the decisions are in `docs/adr/`.
 
-Slice 1 put the hourly history of Kraken spot `XBTUSD` in one SQLite file, resampled to 4-hour and daily candles, served by a small API and shown as candlesticks in a dashboard. Slice 2 added the harness that judges a detector before any detector exists: the true tops and bottoms of the history in hindsight, a replay that hands candles to a detector one hour at a time, the floor detector kept for reference, and the score. Slice 3 added detector one, the first candidate, pre-registered in issue #12 and judged by that harness, and the one explicit command that reads past the out-of-sample boundary. Slice 4 added detector two, the second iteration of the same family, pre-registered in issue #16: detector one's rule with levels that expire after 30 days, and the levels drawn on the replay chart. Family one closed on #16. Slice 5 changes the harness by ADR-0004 to ADR-0006 before family two runs: fifteen-minute candles next to the hourly ones, a replay that hands a detector fifteen-minute candles while the turning points stay hourly, tolerance B, a scoring period from 2016 split in three eras, three impossible prints dropped, and the three recorded runs re-scored under the new definitions (issue #19). Slice 6 adds detector three, the first iteration of family two, pre-registered in issue #20: on fifteen-minute candles, a mark on the first candle that stays short of the swing extreme once the swing has reached the reversal size, with the swing extreme drawn on the replay chart. Slice 7 changes the harness by ADR-0007 before family two's out-of-sample check: the false-mark bar is dropped, the score reports false marks per hit for the period and per era, and the four recorded runs are re-scored (issue #27). Slice 8 spends family two's one out-of-sample check on detector three, pre-registered in issue #28: the run's line is in `out-of-sample.log`, and its score and verdict are recorded on that issue. Slice 9 builds the strategy harness of ADR-0008 before any candidate strategy exists: a backtest that walks a strategy over detector three's recorded run with a notional account under two cost models, spot and the perpetual, the strategy score judged against buying and holding, and the flip, the reference strategy that acts on every mark, run once (issue #32). Slice 10 changes the harness by ADR-0009 before any detector of family three exists: a detector declares its family's reversal size and is scored against the turning points of that size, the out-of-sample boundary moves to 2025-01-01 so the third era is the whole of 2022 to 2024, the backtest runs a strategy on any detector's recorded run, and the out-of-sample check can walk the flip on a detector from the boundary and judge it by ADR-0009's bar (issue #38). No trading yet.
+Slice 1 put the hourly history of Kraken spot `XBTUSD` in one SQLite file, resampled to 4-hour and daily candles, served by a small API and shown as candlesticks in a dashboard. Slice 2 added the harness that judges a detector before any detector exists: the true tops and bottoms of the history in hindsight, a replay that hands candles to a detector one hour at a time, the floor detector kept for reference, and the score. Slice 3 added detector one, the first candidate, pre-registered in issue #12 and judged by that harness, and the one explicit command that reads past the out-of-sample boundary. Slice 4 added detector two, the second iteration of the same family, pre-registered in issue #16: detector one's rule with levels that expire after 30 days, and the levels drawn on the replay chart. Family one closed on #16. Slice 5 changes the harness by ADR-0004 to ADR-0006 before family two runs: fifteen-minute candles next to the hourly ones, a replay that hands a detector fifteen-minute candles while the turning points stay hourly, tolerance B, a scoring period from 2016 split in three eras, three impossible prints dropped, and the three recorded runs re-scored under the new definitions (issue #19). Slice 6 adds detector three, the first iteration of family two, pre-registered in issue #20: on fifteen-minute candles, a mark on the first candle that stays short of the swing extreme once the swing has reached the reversal size, with the swing extreme drawn on the replay chart. Slice 7 changes the harness by ADR-0007 before family two's out-of-sample check: the false-mark bar is dropped, the score reports false marks per hit for the period and per era, and the four recorded runs are re-scored (issue #27). Slice 8 spends family two's one out-of-sample check on detector three, pre-registered in issue #28: the run's line is in `out-of-sample.log`, and its score and verdict are recorded on that issue. Slice 9 builds the strategy harness of ADR-0008 before any candidate strategy exists: a backtest that walks a strategy over detector three's recorded run with a notional account under two cost models, spot and the perpetual, the strategy score judged against buying and holding, and the flip, the reference strategy that acts on every mark, run once (issue #32). Slice 10 changes the harness by ADR-0009 before any detector of family three exists: a detector declares its family's reversal size and is scored against the turning points of that size, the out-of-sample boundary moves to 2025-01-01 so the third era is the whole of 2022 to 2024, the backtest runs a strategy on any detector's recorded run, and the out-of-sample check can walk the flip on a detector from the boundary and judge it by ADR-0009's bar (issue #38). Slice 11 adds paper trading (issue #39): a loop on live fifteen-minute candles from Kraken's spot endpoint that runs detector three and the flip, the reference and never a candidate, with a simulated account under the perpetual cost model, records Kraken Futures' mark price and real funding next to the model's numbers, survives a restart, and reconciles its fills with a backtest over the same candles. No order is placed and no key is needed.
 
 ## Requirements
 
@@ -168,6 +168,32 @@ Backtested flip on three over 319495 candles from 2013-10-06T21:30:00Z to 2024-1
 
 The flip passes or fails nothing: the bar is absolute and the flip only prices it. For a detector of family three that same bar line is the detector's own verdict: its development run is a replay plus the flip on it (ADR-0009). Candidate strategies are pre-registered in their own issues, as detectors are, and each one's single development run, its verdict and its re-scorings are recorded there.
 
+## Paper trading
+
+```sh
+uv run tradingbot paper --detector three --strategy flip
+uv run tradingbot paper report --detector three --strategy flip
+```
+
+Both flags default to `three` and `flip`, so `uv run tradingbot paper` is the same loop. ADR-0009 starts paper trading before any detector of family three exists, so the cost model of ADR-0008 meets the market first. Detector three and the flip run in it as the reference: never a candidate, no bar. Only a detector already in `out-of-sample.log` may run, which today is detector three; a detector of family three joins after its own check. Run it from the repository root, like the out-of-sample check, since that is where the log is read.
+
+`paper` runs until you stop it with Ctrl-C. It catches up the fifteen-minute store from Kraken's spot endpoint as `catch-up --timeframe 15m` does, then consumes every candle once, 15 seconds after it closes: the candle goes to detector three and to the flip in the backtest's order, and a change of position becomes an order filled at the next candle's open, moved 0.05% against the bot, plus the 0.05% fee. Funding is the model's 0.00125% of the position's value at every hourly close while long. The account is a notional 500 USD, flat at the loop's first step, the first candle to close after the loop first started; holding buys 500 USD of Bitcoin at that candle's open with one spot fill. The loop prints one line per step and one per fill. Next to the model it records what Kraken Futures says, from its public endpoints and with no key: the mark price of `PF_XBTUSD` when an order is placed and at every hourly close, kept as the basis over spot, and Kraken's own funding rate for every hour, filled in as Kraken publishes it. A reading that fails stays empty, is never invented, and the step completes without it; a failing candle source is tried again 15 seconds later.
+
+The record lives in four tables of the store's SQLite file, `paper_steps`, `paper_orders`, `paper_fills` and `paper_hours`, keyed by detector and strategy so two loops never mix, and every row is written once. A restart replays the whole store to rebuild the detector's and the flip's state, consumes the candles that closed while the loop was stopped, and never records a fill twice; it refuses to continue when the stored candles no longer produce the recorded fills. A stop longer than the endpoint's reach of 7.5 days is refused with the instruction to import the quarterly archive first. On the first start a hole before the loop's first step is only warned about, since it lies in the detector's history: the quarterly archive for October 2026 does not exist yet, so a store that ends on 30 September starts with the first half of October missing, and the reconciliation replays the same store, hole included.
+
+`paper report` reads the record back:
+
+| Line | What it says |
+| --- | --- |
+| first line | the steps consumed, from the first to the last, the fills, and the share of closes spent long |
+| `account` | the account's value at the last close under the perpetual cost model, in USD and as growth on 500 USD |
+| `holding` | the benchmark's value at the same close, bought at the first step's open with one spot fill |
+| `fills` | every fill: side, size, the model's price (the open moved 0.05%), fee, account after it, and the mark price read when the order was placed with the basis over the close it was placed on |
+| `basis at fills` | the basis at the fills, perpetual mark price over spot in percent: how many were read and the three quartiles |
+| `basis at hours` | the same at every hourly close the loop lived through |
+| `funding` | the model's funding against Kraken's real rate on the same position, summed over the hours long with a rate published; hours long whose rate is not published yet are counted apart; one line per month follows |
+| `reconciliation` | a backtest of the same detector and strategy over the stored candles, the account from the loop's first step: the fills it makes, and how many of the loop's differ in time, side or price, or exist on one side only; expected zero |
+
 ## Check the hourly candles built from the fifteen-minute ones
 
 ```sh
@@ -255,6 +281,23 @@ Decided on 22 October 2026 and recorded in ADR-0009 before the budget look and b
 
 The four recorded runs stay at 8% and are not re-scored, since nothing in their definitions changed: `re-score floor`, `one`, `two` and `three` print the numbers recorded under ADR-0007, with the reversal size as a new first line, and `re-score three --strategy flip` the fills and score recorded on #32.
 
+## Definitions fixed in slice 11
+
+Fixed in issue #39 before the loop's first step. The live numbers of ADR-0008, hosting, alerts, the account size and the halt, stay parked for the paper-trading grilling.
+
+| Definition | Value | Where |
+| --- | --- | --- |
+| Candle source | Kraken's public spot OHLC endpoint, interval 15, as `catch-up` reads it; a candle is consumed only once it is complete and stored | `paper.py`, `sync.py` |
+| Step | once per fifteen-minute candle, after it closes: store it, hand the candles so far, the marks so far and the turning points so far to the detector and the strategy in the backtest's order, and if the desired position changed, record an order to fill at the next candle's open | `paper.py`, `replay.py`, `backtest.py` |
+| Fill | the next candle's open moved 0.05% against the bot, plus the 0.05% fee, as the perpetual cost model; recorded when that candle arrives | `backtest.py` |
+| Funding | 0.00125% of the position's value at every hourly close while long, as the model; Kraken Futures' relative rate for the same hour recorded next to it | `paper.py`, `kraken_futures.py` |
+| Basis | at every order and every hourly close: the mark price of `PF_XBTUSD` over the spot close, in percent, from the public Futures ticker; missing when the endpoint fails, never invented | `paper.py`, `kraken_futures.py` |
+| Account | a notional 500 USD, flat at the loop's first step; valued at every fifteen-minute close like the backtest's | `paper.py`, `backtest.py` |
+| Restart | the loop rebuilds the detector's and the strategy's state by replaying the whole store, then continues from the last stored candle; a fill already recorded is never recorded twice | `paper.py` |
+| Gap | a stop longer than the endpoint's reach, 7.5 days, is refused with the instruction to import the quarterly archive first | `paper.py` |
+
+Three readings fixed in code rather than in the issue. The basis at a fill is read when its order is placed, at the close of the mark's candle, since that is when a live order would reach the exchange; the fill itself comes at the next open. Kraken publishes a funding rate per hour, stamped with the hour it starts; the rate charged at an hourly close is the one stamped with the hour that starts there. A loop's first start with a hole older than the reach warns rather than refuses, as above.
+
 ## Definitions fixed in slice 3
 
 Fixed in issue #12 before detector one's first run, with the same rule: changing one is a new decision.
@@ -310,6 +353,7 @@ src/tradingbot/
   candles.py         Candle, Timeframe and resampling: 15m to 1h, 1h to 4h and 1d
   store.py           the SQLite store, one table per stored timeframe (15m, 1h)
   kraken.py          the OHLCVT archive reader and the REST endpoint client
+  kraken_futures.py  the public Kraken Futures ticker and funding history: no key, no order route
   sync.py            archive import (dropped prints skipped) and catch-up
   development.py     the out-of-sample boundary and the only way to read development candles
   turning_points.py  turning points in hindsight, found one hourly candle at a time
@@ -320,9 +364,10 @@ src/tradingbot/
   hourly_check.py    the hourly candles built from 15-minute ones against the stored hourly table
   out_of_sample.py   the one explicit check past the boundary, logged per run, with the flip for a detector of family three
   strategies.py      the Strategy interface, what a strategy reads, and the flip
-  backtest.py        the strategy backtest: the account, the two cost models, the benchmark, the strategy score and the bar, per era or over a period as one
+  paper.py           the paper-trading loop, its record in the store's file, and the report with the reconciliation
+  backtest.py        the strategy backtest, walked one candle at a time: the account, the two cost models, the benchmark, the strategy score and the bar, per era or over a period as one
   api.py             the FastAPI app with GET /candles, /turning-points (with an optional reversal size) and /replay (with an optional strategy)
-  cli.py             the tradingbot command: import, catch-up, serve, replay, re-score, check-hourly, out-of-sample (with --strategy), backtest (with --detector)
+  cli.py             the tradingbot command: import, catch-up, serve, replay, re-score, check-hourly, out-of-sample (with --strategy), backtest (with --detector), paper and paper report
 tests/               pytest suite
 dashboard/           SvelteKit app: hindsight view and replay
 docs/adr/            architecture decision records
