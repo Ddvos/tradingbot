@@ -59,8 +59,6 @@ from tradingbot.strategies import MarkWithExtreme, Position, Strategy
 from tradingbot.sync import CandleSource, catch_up
 from tradingbot.turning_points import Kind
 
-HOUR = 3600
-
 GRACE = 15
 """Seconds after a candle's close before the loop asks the endpoint for it."""
 
@@ -167,8 +165,9 @@ class HourRecord:
     funding: float
     """The model's funding at this close: 0.00125% of the position's value, 0 while flat."""
     rate: float | None
-    """Kraken Futures' relative funding rate charged at this close, the rate it published
-    for the hour that starts there; None until published, or never when it skipped the hour."""
+    """Kraken Futures' relative funding rate for the same hour, charged at this close: the
+    history stamps a rate with the start of the hour it covers, as its current rate on the
+    ticker shows. None until published, or never when Kraken skipped the hour."""
     mark_price: float | None
     """The perpetual's mark price read at the close; None when not read."""
 
@@ -178,8 +177,12 @@ class HourRecord:
 
     @property
     def funding_real(self) -> float | None:
-        """What Kraken's rate charges on the same position; None without a rate."""
-        return None if self.rate is None else self.rate * self.btc * self.close
+        """What Kraken's rate charges on the same position, valued at the perpetual's mark
+        price when it was read and at the spot close otherwise; None without a rate."""
+        if self.rate is None:
+            return None
+        price = self.close if self.mark_price is None else self.mark_price
+        return self.rate * self.btc * price
 
 
 _SCHEMA = """
@@ -241,8 +244,9 @@ CREATE TABLE IF NOT EXISTS paper_hours (
 
 class PaperStore:
     """The record of one loop, the tables above in the store's SQLite file, keyed by the
-    detector and the strategy; `":memory:"` keeps it in memory. Every row is written once:
-    the keys refuse a second step, order, fill or hour at the same time."""
+    detector and the strategy; `":memory:"` keeps it in memory. Every row is inserted once:
+    the keys refuse a second step, order, fill or hour at the same time. Only two columns
+    are filled in later, an order's fill time and an hour's real rate, each once."""
 
     def __init__(self, path: str | Path, detector: str, strategy: str) -> None:
         self.detector = detector
@@ -411,14 +415,14 @@ class PaperStore:
                 )
 
     def set_rates(self, rates: dict[int, float]) -> int:
-        """Fill in Kraken's rate on every hour still without one, where `rates` (by the hour's
-        start time) holds the rate published for the hour the close starts; answers how many."""
+        """Fill in Kraken's rate on every hour still without one, from `rates` by the hour's
+        start time; answers how many."""
         detector, strategy = self._key
         missing = self._conn.execute(
             "SELECT time FROM paper_hours WHERE detector = ? AND strategy = ? AND rate IS NULL",
             self._key,
         ).fetchall()
-        found = [(rates[t + HOUR], detector, strategy, t) for (t,) in missing if t + HOUR in rates]
+        found = [(rates[t], detector, strategy, t) for (t,) in missing if t in rates]
         with self._conn:
             self._conn.executemany(
                 "UPDATE paper_hours SET rate = ? WHERE detector = ? AND strategy = ? AND time = ?",
@@ -453,6 +457,7 @@ Event = StepRecord | FillRecord | Notice
 
 
 def missing_candles(unreachable: tuple[int, int], label: str) -> str:
+    """The candles `catch_up` could not reach, said for a message."""
     first, last = unreachable
     return (
         f"the {label} candles from {iso(first)} to {iso(last)} are missing and the endpoint "
@@ -548,8 +553,7 @@ class Loop:
                     if stepped.order is not None:
                         self._pending = orders[candle.time]
                 else:
-                    live = now < candle.time + 2 * self._size
-                    events.extend(self._record(candle, step, stepped, now, live=live))
+                    events.extend(self._record(candle, step, stepped, now))
             self._newest = candle.time
         if first is not None:
             events.extend(self._fill_in_rates())
@@ -575,8 +579,7 @@ class Loop:
             if self._walker.account_from is None:
                 self._walker.account_from = candle.time
             step, stepped = self._advance(candle)
-            live = now < candle.time + 2 * self._size
-            events.extend(self._record(candle, step, stepped, now, live=live))
+            events.extend(self._record(candle, step, stepped, now))
             closed_an_hour = closed_an_hour or bool(stepped.hours)
             self._newest = candle.time
         if closed_an_hour:
@@ -641,11 +644,11 @@ class Loop:
             "Nothing was written; `paper report` counts the mismatches."
         )
 
-    def _record(
-        self, candle: Candle, step: Step, stepped: Stepped, now: int, *, live: bool
-    ) -> list[Event]:
+    def _record(self, candle: Candle, step: Step, stepped: Stepped, now: int) -> list[Event]:
         """Record the step with everything it did; read the market only when the step is
-        live, the candle having closed within the last period."""
+        live, the candle having closed within the last period, never for a candle caught
+        up after a stop."""
+        live = now < candle.time + 2 * self._size
         events: list[Event] = []
         reading: list[MarkPrice | None] = []
 
@@ -806,7 +809,8 @@ class Reconciliation:
     expected: int
     """Fills the backtest made."""
     mismatches: int
-    """Fills that differ in time, side or price, plus the fills only one side has."""
+    """Fill candles the two disagree on: a fill only one side has, or one whose side or
+    price differs."""
     first: int | None
     """Time of the first fill the two disagree on."""
 
@@ -822,17 +826,10 @@ def reconcile(
     and count the fills that differ from the recorded ones."""
     result = score_replayed(replay_all(candles, detector))
     expected = walk(result, strategy, account_from=account_from).fills
-    ours = [(f.time, f.side, f.price) for f in recorded]
-    theirs = [(f.time, f.side, f.price) for f in expected]
-    differing = [i for i, (a, b) in enumerate(zip(ours, theirs, strict=False)) if a != b]
-    shorter = min(len(ours), len(theirs))
-    extra = abs(len(ours) - len(theirs))
-    first = None
-    if differing:
-        first = min(ours[differing[0]][0], theirs[differing[0]][0])
-    elif extra:
-        first = (ours if len(ours) > shorter else theirs)[shorter][0]
-    return Reconciliation(len(expected), len(differing) + extra, first)
+    ours = {f.time: (f.side, f.price) for f in recorded}
+    theirs = {f.time: (f.side, f.price) for f in expected}
+    differing = sorted(t for t in ours.keys() | theirs.keys() if ours.get(t) != theirs.get(t))
+    return Reconciliation(len(expected), len(differing), differing[0] if differing else None)
 
 
 @dataclass(frozen=True)
@@ -859,6 +856,11 @@ class Report:
     @property
     def benchmark_growth(self) -> float:
         return self.last.benchmark / STARTING_USD
+
+    @property
+    def hours_long(self) -> int:
+        """The hourly closes the account was long at."""
+        return sum(h.btc > 0 for h in self.hours)
 
     @property
     def share_long(self) -> float:
@@ -904,6 +906,7 @@ def describe_basis(label: str, readings: Sequence[float | None]) -> tuple[str, s
 
 
 def month_of(time: int) -> str:
+    """The UTC calendar month holding `time`, like 2026-10."""
     return datetime.fromtimestamp(time, UTC).strftime("%Y-%m")
 
 
@@ -916,13 +919,13 @@ def describe_funding(hours: Sequence[HourRecord]) -> str:
     known = [h for h in long if h.rate is not None]
     modelled = sum(h.funding for h in known)
     real = sum(h.funding_real or 0.0 for h in known)
-    hours_ = "hour" if len(known) == 1 else "hours"
-    line = f"modelled {modelled:.4f} USD, real {real:.4f} USD over {len(known)} {hours_} long"
+    counted = "hour" if len(known) == 1 else "hours"
+    line = f"modelled {modelled:.4f} USD, real {real:.4f} USD over {len(known)} {counted} long"
     unknown = [h for h in long if h.rate is None]
     if unknown:
-        hours_ = "hour" if len(unknown) == 1 else "hours"
+        counted = "hour" if len(unknown) == 1 else "hours"
         line += (
-            f" with a rate published; {len(unknown)} {hours_} long without one "
+            f" with a rate published; {len(unknown)} {counted} long without one "
             f"(modelled {sum(h.funding for h in unknown):.4f} USD)"
         )
     return line
@@ -936,7 +939,8 @@ def describe_report(report: Report) -> list[str]:
     lines = [
         f"Paper trading {report.strategy} on {report.detector}: {len(report.steps)} {steps} from "
         f"{iso(first.time)} to {iso(last.time)}, {len(report.fills)} {fills}, long "
-        f"{report.share_long:.1%} of the closes.",
+        f"{report.share_long:.1%} of the closes, {report.hours_long} of "
+        f"{len(report.hours)} hourly closes.",
         f"  {'account':<16} {last.value:,.2f} USD  ({describe_growth(report.growth)})",
         f"  {'holding':<16} {last.benchmark:,.2f} USD  "
         f"({describe_growth(report.benchmark_growth)})",

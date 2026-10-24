@@ -176,10 +176,11 @@ def test_funding_is_the_models_at_every_hourly_close_long_and_krakens_rate_is_fi
     assert long.btc == pytest.approx(size)
     assert long.funding == pytest.approx(size * 91 * PERPETUAL.funding)
     assert long.value == pytest.approx(size * 91 - long.funding)
-    # The rate Kraken published for the hour that starts at the close, hour 28's.
-    assert long.rate == RATES[at(28)]
-    assert long.funding_real == pytest.approx(RATES[at(28)] * size * 91)
-    assert all(h.rate == RATES[h.time + H] for h in hours)
+    # Kraken's rate for the same hour, charged at its close on the position valued at the
+    # mark price read there.
+    assert long.rate == RATES[at(27)]
+    assert long.funding_real == pytest.approx(RATES[at(27)] * size * 95)
+    assert all(h.rate == RATES[h.time] for h in hours)
     assert futures.rate_reads == 8, "the history is read once per hourly close"
 
 
@@ -207,7 +208,7 @@ def test_a_restart_rebuilds_the_state_consumes_the_stopped_hours_and_double_fill
     hours = {h.time: h for h in paper.hours()}
     assert hours[at(28)].mark_price is None, "hour 28 closed while the loop was stopped"
     assert hours[at(29)].mark_price == 96.0, "hour 29 closed just before the start"
-    assert hours[at(28)].rate == RATES[at(29)], "its rate was filled in at the start"
+    assert hours[at(28)].rate == RATES[at(28)], "its rate was filled in at the start"
 
     tick_through(restarted, range(30, 33))
 
@@ -493,6 +494,17 @@ def test_the_report_counts_a_fill_only_one_side_has(tmp_path: Path) -> None:
     assert reported.reconciliation == Reconciliation(expected=2, mismatches=1, first=at(31))
 
 
+def test_a_fill_missing_early_counts_once_not_for_every_later_fill(tmp_path: Path) -> None:
+    store, paper = recorded_run(tmp_path)
+    with sqlite3.connect(tmp_path / "candles.sqlite") as conn:
+        conn.execute("DELETE FROM paper_fills WHERE time = ?", (at(27),))
+
+    reported = report(paper, store, Scripted(SCRIPT), Flip())
+
+    assert reported is not None
+    assert reported.reconciliation == Reconciliation(expected=2, mismatches=1, first=at(27))
+
+
 def test_there_is_no_report_before_the_first_step(tmp_path: Path) -> None:
     loop, store, paper = loop_on_the_zigzag(tmp_path, FakeFutures())
 
@@ -510,7 +522,7 @@ def test_describe_report_prints_the_money_the_fills_the_basis_the_funding_and_th
 
     assert lines[0] == (
         "Paper trading flip on scripted: 12 steps from 2024-01-01T21:00:00Z to "
-        "2024-01-02T08:00:00Z, 2 fills, long 33.3% of the closes."
+        "2024-01-02T08:00:00Z, 2 fills, long 33.3% of the closes, 4 of 12 hourly closes."
     )
     assert lines[1].startswith("  account          542.") and "(×1.09)" in lines[1]
     assert lines[2].startswith("  holding          533.") and "(×1.07" in lines[2]
@@ -522,7 +534,7 @@ def test_describe_report_prints_the_money_the_fills_the_basis_the_funding_and_th
     assert lines[6] == "  basis at fills   2 of 2 read: quartiles -0.515% / +0.011% / +0.537%"
     assert lines[7].startswith("  basis at hours   12 of 12 read: quartiles ")
     assert lines[8].startswith("  funding          modelled 0.0")
-    assert lines[8] == "  funding          modelled 0.0254 USD, real 0.5996 USD over 4 hours long"
+    assert lines[8] == "  funding          modelled 0.0254 USD, real 0.5945 USD over 4 hours long"
     assert lines[9].startswith("    2024-01        modelled 0.0")
     assert lines[10] == (
         "  reconciliation   2 fills in the backtest over the same candles, 0 mismatches"
@@ -530,7 +542,7 @@ def test_describe_report_prints_the_money_the_fills_the_basis_the_funding_and_th
 
 
 def test_describe_report_says_which_hours_long_have_no_rate_yet(tmp_path: Path) -> None:
-    store, paper = recorded_run(tmp_path, FakeFutures(price=95.0, rates={at(28): 0.00001}))
+    store, paper = recorded_run(tmp_path, FakeFutures(price=95.0, rates={at(27): 0.00001}))
     reported = report(paper, store, Scripted(SCRIPT), Flip())
     assert reported is not None
 

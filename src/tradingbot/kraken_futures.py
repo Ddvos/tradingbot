@@ -36,6 +36,7 @@ class KrakenFutures:
     """The public Kraken Futures REST API."""
 
     BASE_URL = "https://futures.kraken.com/derivatives/api"
+    """The public REST API; the ticker is under v3, the funding history under v4."""
 
     def __init__(self, http: httpx.Client | None = None) -> None:
         self._http = http or httpx.Client(timeout=30.0)
@@ -55,8 +56,10 @@ class KrakenFutures:
 
     def funding_rates(self) -> dict[int, float]:
         """The relative funding rate of every hour Kraken Futures publishes, about a year of
-        them, by the hour's start time: the share of the position's value charged to a long
-        at that hour, negative when longs were paid. An hour with no entry was not published."""
+        them, by the start of the hour it covers, charged at that hour's close: the share of
+        the position's value a long pays, negative when longs were paid. The rate stamped
+        with the current hour is the ticker's current rate. An hour with no entry was not
+        published."""
         body = self._get("v4/historicalfundingrates", symbol=PERPETUAL_SYMBOL)
         return {
             parse_time(rate["timestamp"]): float(rate["relativeFundingRate"])

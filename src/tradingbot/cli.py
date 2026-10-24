@@ -378,6 +378,7 @@ def run_paper(
 
 
 def run_paper_report(db: Path, detector_name: str, strategy_name: str) -> None:
+    """The paper loop's record read back and reconciled with a backtest over the same candles."""
     detector = detector_named(detector_name)
     strategy = strategy_named(strategy_name)
     with (
