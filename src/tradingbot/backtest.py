@@ -18,6 +18,10 @@ perpetual and so goes below zero until the sale settles it; a trade's result
 therefore carries the funding paid while it was open. The benchmark is one account that
 buys Bitcoin at the first candle of the scoring period with one spot fill and
 holds; it is the same under both models.
+
+`Walker` is the walk one candle at a time, so the paper loop (slice 11) drives
+the same code over live candles and makes the backtest's fills; `walk` drives
+it over a recorded replay.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from enum import Enum
 from statistics import median
 
 from tradingbot.candles import Candle, Timeframe, iso, period_start
-from tradingbot.detectors import SwingExtreme
+from tradingbot.detectors import Mark, SwingExtreme
 from tradingbot.replay import HourBuilder, MarkOutcome, ReplayResult
 from tradingbot.scoring import ERAS, Era
 from tradingbot.strategies import MarkWithExtreme, Position, Strategy
@@ -312,11 +316,12 @@ class BacktestResult:
 
 
 def extremes_by_mark(
-    marks: Sequence[MarkOutcome], extremes: Sequence[SwingExtreme]
+    marks: Sequence[Mark | MarkOutcome], extremes: Sequence[SwingExtreme]
 ) -> dict[int, float | None]:
     """The swing extreme each mark was measured against: the extreme of the mark's kind
     whose span of reading candles holds the mark's candle; None for a detector without
-    swing extremes."""
+    swing extremes. Over a whole run afterwards, or for the mark just placed against the
+    extremes read so far, where the standing one is the last of its kind."""
     by_kind: dict[Kind, list[SwingExtreme]] = {kind: [] for kind in Kind}
     for extreme in extremes:
         by_kind[extreme.kind].append(extreme)
@@ -369,78 +374,170 @@ class Walked:
     """Per cost model, the funding paid at each hourly close, with the hour's start time."""
 
 
-def walk(result: ReplayResult, strategy: Strategy) -> Walked:
-    """Run the strategy over the replay from the first scored candle on, one account per
-    cost model and one for the benchmark.
+@dataclass(frozen=True)
+class HourClosed:
+    """An hourly close the account lived through: what each cost model's account paid and
+    held at it, and what it and the benchmark were worth."""
 
-    A change of desired position is placed only while the latest mark lies in
-    the scoring period: marks before it are history, never acted on.
+    hour: Candle
+    funding: dict[str, float]
+    """Per cost model, the funding paid at this close; 0 while flat."""
+    btc: dict[str, float]
+    """Per cost model, the Bitcoin held at this close."""
+    values: dict[str, float]
+    """Per cost model, the account's value at the close, after the funding."""
+    benchmark: float
+
+
+@dataclass(frozen=True)
+class Stepped:
+    """What one candle did to the account: the fill at its open, the hours it closed in the
+    account's period, and the order its close placed."""
+
+    fill: Fill | None
+    hours: tuple[HourClosed, ...]
+    order: Order | None
+
+
+class Walker:
+    """The walk one candle at a time, from the first candle of the series on.
+
+    Every candle is history the strategy may read; from `account_from` on, the
+    account's first candle, the hours closing from its hour on pay funding and
+    are valued, a pending order fills at the candle's open, the benchmark buys
+    at the first such candle, the account is valued at every close and the
+    strategy is asked. `account_from` may be set later, before the first candle
+    of the account's period arrives, as the paper loop does when its first step
+    is the first candle to close after it started. A change of desired position
+    is placed only while the latest mark lies in the account's period: marks
+    before it are history, never acted on.
     """
-    candles, marks, points = result.candles, result.marks, result.turning_points
-    account_from = result.scored_from if result.scored_from is not None else candles[0].time
-    first = bisect_left(candles, account_from, key=lambda c: c.time)
-    first_hour = period_start(account_from, Timeframe.H1)
-    hit_of = {m.time: m.hit for m in marks if m.scored}
-    extreme_of = extremes_by_mark(marks, result.swing_extremes)
-    hours = HourBuilder(result.timeframe)
-    accounts = [Account(model, STARTING_USD) for model in COST_MODELS]
-    benchmark = Account(SPOT, STARTING_USD)
-    closes, hourly = ValueSeries.empty(), ValueSeries.empty()
-    long: list[bool] = []
-    funding: dict[str, list[tuple[int, float]]] = {model.name: [] for model in COST_MODELS}
-    seen: list[Candle] = []
-    marks_seen: list[MarkWithExtreme] = []
-    points_seen: list[TurningPoint] = []
-    next_point = next_mark = 0
-    position = Position.FLAT
-    order: Order | None = None
-    fills: list[Fill] = []
 
-    def close_hour(hour: Candle) -> None:
+    def __init__(self, strategy: Strategy, account_from: int | None = None) -> None:
+        self.strategy = strategy
+        self.account_from = account_from
+        self.accounts = [Account(model, STARTING_USD) for model in COST_MODELS]
+        self.benchmark = Account(SPOT, STARTING_USD)
+        self.position = Position.FLAT
+        self.order: Order | None = None
+        """The change of position awaiting the next candle's open."""
+        self.seen: list[Candle] = []
+        self.marks_seen: list[MarkWithExtreme] = []
+        self.points_seen: list[TurningPoint] = []
+        self.closes = ValueSeries.empty()
+        self.long: list[bool] = []
+        self.hourly = ValueSeries.empty()
+        self.funding: dict[str, list[tuple[int, float]]] = {m.name: [] for m in COST_MODELS}
+        self._started = False
+        """Whether the account's first candle has been walked: the benchmark bought there."""
+
+    def account(self, cost_model: CostModel) -> Account:
+        return next(a for a in self.accounts if a.model is cost_model)
+
+    def _close_hour(self, hour: Candle) -> HourClosed:
         """Funding on the position standing at the hour's close, then the hourly values."""
-        for account in accounts:
+        funding: dict[str, float] = {}
+        for account in self.accounts:
             cost = account.fund(hour.close)
+            funding[account.model.name] = cost
             if cost:
-                funding[account.model.name].append((hour.time, cost))
-        hourly.record(hour.time, hour.close, accounts, benchmark)
+                self.funding[account.model.name].append((hour.time, cost))
+        self.hourly.record(hour.time, hour.close, self.accounts, self.benchmark)
+        return HourClosed(
+            hour,
+            funding,
+            {a.model.name: a.btc for a in self.accounts},
+            {a.model.name: a.value(hour.close) for a in self.accounts},
+            self.benchmark.value(hour.close),
+        )
 
-    for i, candle in enumerate(candles):
-        completed = hours.push(candle, last=i == len(candles) - 1)
+    def step(
+        self,
+        candle: Candle,
+        completed: Sequence[Candle],
+        mark: MarkWithExtreme | None,
+        confirmed: Sequence[TurningPoint],
+    ) -> Stepped:
+        """Walk the next candle: `completed` are the hourly candles it completed, `mark` the
+        mark the detector placed on it with its swing extreme, `confirmed` the turning
+        points those hours confirmed."""
+        account_from = self.account_from
+        in_period = account_from is not None and candle.time >= account_from
+        first_hour = None if account_from is None else period_start(account_from, Timeframe.H1)
         own_hour = period_start(candle.time, Timeframe.H1)
         # An hour left open by a missing candle closed before this candle opened; the
         # candle's own hour closes with the candle, after any fill at its open.
-        earlier = [h for h in completed if first_hour <= h.time < own_hour]
-        own = [h for h in completed if h.time == own_hour >= first_hour]
-        for hour in earlier:
-            close_hour(hour)
-        if order is not None:
-            fills.append(fill(order, candle, accounts))
-            position = Position.LONG if order.side is Side.BUY else Position.FLAT
-            order = None
-        if i == first:
-            benchmark.buy(candle.open)
-        seen.append(candle)
+        earlier = [
+            h for h in completed if first_hour is not None and first_hour <= h.time < own_hour
+        ]
+        own = [h for h in completed if first_hour is not None and h.time == own_hour >= first_hour]
+        hours = [self._close_hour(hour) for hour in earlier]
+        filled = None
+        if self.order is not None:
+            filled = fill(self.order, candle, self.accounts)
+            self.position = Position.LONG if self.order.side is Side.BUY else Position.FLAT
+            self.order = None
+        if in_period and not self._started:
+            self.benchmark.buy(candle.open)
+            self._started = True
+        self.seen.append(candle)
+        self.points_seen.extend(confirmed)
+        if mark is not None:
+            self.marks_seen.append(mark)
+        hours.extend(self._close_hour(hour) for hour in own)
+        order = None
+        if in_period:
+            assert account_from is not None
+            self.closes.record(candle.time, candle.close, self.accounts, self.benchmark)
+            self.long.append(self.position is Position.LONG)
+            desired = self.strategy.desired(
+                self.seen, self.marks_seen, self.points_seen, self.position
+            )
+            if (
+                desired is not self.position
+                and self.marks_seen
+                and self.marks_seen[-1].time >= account_from
+            ):
+                side = Side.BUY if desired is Position.LONG else Side.SELL
+                order = self.order = Order(side, self.marks_seen[-1].time)
+        return Stepped(filled, tuple(hours), order)
+
+
+def walk(result: ReplayResult, strategy: Strategy, account_from: int | None = None) -> Walked:
+    """Run the strategy over the replay from the first scored candle on, or from
+    `account_from`, one account per cost model and one for the benchmark.
+
+    A change of desired position is placed only while the latest mark lies in
+    the account's period: marks before it are history, never acted on.
+    """
+    candles, marks, points = result.candles, result.marks, result.turning_points
+    if account_from is None:
+        account_from = result.scored_from if result.scored_from is not None else candles[0].time
+    hit_of = {m.time: m.hit for m in marks if m.scored}
+    extreme_of = extremes_by_mark(marks, result.swing_extremes)
+    hours = HourBuilder(result.timeframe)
+    walker = Walker(strategy, account_from)
+    next_point = next_mark = 0
+    fills: list[Fill] = []
+    for i, candle in enumerate(candles):
+        completed = hours.push(candle, last=i == len(candles) - 1)
+        confirmed: list[TurningPoint] = []
         if completed:
             latest_hour = completed[-1].time
             while next_point < len(points) and points[next_point].confirmed_at <= latest_hour:
-                points_seen.append(points[next_point])
+                confirmed.append(points[next_point])
                 next_point += 1
+        mark = None
         if next_mark < len(marks) and marks[next_mark].time == candle.time:
-            mark = marks[next_mark]
-            marks_seen.append(
-                MarkWithExtreme(mark.kind, mark.time, mark.price, extreme_of[mark.time])
-            )
+            placed = marks[next_mark]
+            mark = MarkWithExtreme(placed.kind, placed.time, placed.price, extreme_of[placed.time])
             next_mark += 1
-        for hour in own:
-            close_hour(hour)
-        if i >= first:
-            closes.record(candle.time, candle.close, accounts, benchmark)
-            long.append(position is Position.LONG)
-            desired = strategy.desired(seen, marks_seen, points_seen, position)
-            if desired is not position and marks_seen and marks_seen[-1].time >= account_from:
-                side = Side.BUY if desired is Position.LONG else Side.SELL
-                order = Order(side, marks_seen[-1].time)
-    return Walked(closes, long, hourly, fills, pair_trades(fills, hit_of), funding)
+        stepped = walker.step(candle, completed, mark, confirmed)
+        if stepped.fill is not None:
+            fills.append(stepped.fill)
+    return Walked(
+        walker.closes, walker.long, walker.hourly, fills, pair_trades(fills, hit_of), walker.funding
+    )
 
 
 def pair_trades(fills: Sequence[Fill], hit_of: dict[int, bool]) -> list[Trade]:

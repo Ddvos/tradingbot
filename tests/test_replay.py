@@ -450,3 +450,49 @@ def test_the_era_split_follows_the_turning_points_of_the_detectors_size() -> Non
     assert (by_era["2019-2021"].hits, by_era["2019-2021"].false_marks) == (0, 1)
     assert (by_era["2022-2024"].hits, by_era["2022-2024"].false_marks) == (1, 0)
     assert by_era["2016-2018"].turning_points == 0
+
+
+# --- the replayer, one candle at a time (slice 11) -------------------------------------------
+
+
+def test_a_replayer_pushed_one_candle_at_a_time_answers_the_steps_replay_answers() -> None:
+    from tradingbot.replay import Replayer
+
+    quarters = quarter_walk(hours=300, seed=24)
+    expected = list(replay(quarters, DetectorThree()))
+    replayer = Replayer(DetectorThree())
+
+    steps = [
+        replayer.push(candle, last=i == len(quarters) - 1) for i, candle in enumerate(quarters)
+    ]
+
+    assert steps == expected
+    assert any(step.mark is not None for step in steps)
+    assert any(step.confirmed for step in steps)
+
+
+def test_a_replayer_fed_live_never_completes_the_hour_still_forming() -> None:
+    from tradingbot.replay import Replayer
+
+    replayer = Replayer(Spy(Timeframe.M15))
+    quarters = [Candle(T0 + q * Q, 1.0, 1.0, 1.0, 1.0, 1.0, 1) for q in range(6)]  # to 01:15
+
+    completed = [hour for candle in quarters for hour in replayer.push(candle).completed]
+
+    assert [hour.time for hour in completed] == [T0], "01:00 is still forming"
+    assert replayer.push(Candle(T0 + 6 * Q, 1.0, 1.0, 1.0, 1.0, 1.0, 1)).completed == ()
+    assert [
+        h.time for h in replayer.push(Candle(T0 + 7 * Q, 1.0, 1.0, 1.0, 1.0, 1.0, 1)).completed
+    ] == [T0 + 4 * Q], "01:45 ends the hour"
+
+
+def test_a_replayer_refuses_a_candle_out_of_order_or_off_its_timeframe() -> None:
+    from tradingbot.replay import Replayer
+
+    replayer = Replayer(Spy())
+    replayer.push(Candle(T0 + H, 1.0, 1.0, 1.0, 1.0, 1.0, 1))
+
+    with pytest.raises(ValueError, match="time order"):
+        replayer.push(Candle(T0, 1.0, 1.0, 1.0, 1.0, 1.0, 1))
+    with pytest.raises(ValueError, match="does not start"):
+        replayer.push(Candle(T0 + 2 * H + Q, 1.0, 1.0, 1.0, 1.0, 1.0, 1))

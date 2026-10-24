@@ -1,7 +1,8 @@
 """The `tradingbot` command: import the archive, catch up, serve the API, replay a detector,
 re-score a recorded run (and a recorded backtest on it), check the hourly candles built from
 the fifteen-minute ones, run the one out-of-sample check (with the flip for a detector of
-family three), backtest a strategy on a detector's recorded run."""
+family three), backtest a strategy on a detector's recorded run, paper trade on live candles
+and report the paper loop's record."""
 
 from __future__ import annotations
 
@@ -9,9 +10,10 @@ import argparse
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
-from tradingbot import out_of_sample, re_score
+from tradingbot import out_of_sample, paper, re_score
 from tradingbot.backtest import (
     COST_MODELS_ADR,
     BacktestResult,
@@ -24,11 +26,13 @@ from tradingbot.detectors import DETECTORS, Detector, DetectorThree
 from tradingbot.development import OUT_OF_SAMPLE_BOUNDARY, read_development
 from tradingbot.hourly_check import check_hourly
 from tradingbot.kraken import REST_REACH, KrakenSpot
+from tradingbot.kraken_futures import KrakenFutures
+from tradingbot.paper import PaperStore
 from tradingbot.replay import ReplayResult, run
 from tradingbot.scoring import HARNESS_ADR, SCORING_START, describe_score
 from tradingbot.store import STORED_TIMEFRAMES, CandleStore
 from tradingbot.strategies import STRATEGIES, Strategy
-from tradingbot.sync import catch_up, import_archive
+from tradingbot.sync import CandleSource, catch_up, import_archive
 
 DEFAULT_DB = "data/candles.sqlite"
 
@@ -312,6 +316,84 @@ def run_out_of_sample(db: Path, name: str, strategy_name: str | None, out: Path 
         )
 
 
+def say(line: str) -> None:
+    """Print a line of a long-running command at once, so a log of it reads live."""
+    print(line, flush=True)
+
+
+def run_paper(
+    db: Path,
+    detector_name: str,
+    strategy_name: str,
+    *,
+    source: CandleSource | None = None,
+    futures: paper.FuturesSource | None = None,
+    now: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """The paper-trading loop until stopped with Ctrl-C (slice 11, ADR-0009). Only a detector
+    past its out-of-sample check runs in it: detector three, and a detector of family three
+    after its own check. `source`, `futures`, `now` and `sleep` are Kraken's and the clock's
+    unless a test passes its own."""
+    detector = detector_named(detector_name)
+    strategy = strategy_named(strategy_name)
+    log = Path(out_of_sample.DEFAULT_LOG)
+    if detector.name not in out_of_sample.logged_detectors(log):
+        sys.exit(
+            f"Detector {detector.name!r} has not had its out-of-sample check (no line in {log}); "
+            "only a detector past its check runs in the paper loop (ADR-0009)."
+        )
+    if source is None:
+        kraken = KrakenSpot()
+
+        def kraken_candles(since: int | None) -> list[Candle]:
+            return kraken.candles(detector.timeframe, since)
+
+        source = kraken_candles
+    futures = futures if futures is not None else KrakenFutures()
+    now = now if now is not None else time.time
+    sleep = sleep if sleep is not None else time.sleep
+    with (
+        CandleStore(db, detector.timeframe) as store,
+        PaperStore(db, detector.name, strategy.name) as record,
+    ):
+        loop = paper.Loop(store, record, detector, strategy, source, futures)
+        try:
+            for event in loop.start(int(now())):
+                say(paper.describe_event(event))
+            say(
+                f"Paper trading {strategy.name} on {detector.name}. {describe(store)} The loop "
+                "consumes every candle as it closes; stop it with Ctrl-C, start it again to "
+                "continue from its last step."
+            )
+            paper.run(loop, now, sleep, say)
+        except paper.Refused as refused:
+            sys.exit(str(refused))
+        except KeyboardInterrupt:
+            say(
+                f"Stopped. `tradingbot paper report --detector {detector.name} --strategy "
+                f"{strategy.name}` reads the record; starting the loop again continues from "
+                "its last step."
+            )
+
+
+def run_paper_report(db: Path, detector_name: str, strategy_name: str) -> None:
+    """The paper loop's record read back and reconciled with a backtest over the same candles."""
+    detector = detector_named(detector_name)
+    strategy = strategy_named(strategy_name)
+    with (
+        CandleStore(db, detector.timeframe) as store,
+        PaperStore(db, detector.name, strategy.name) as record,
+    ):
+        reported = paper.report(record, store, detector, strategy)
+    if reported is None:
+        sys.exit(
+            f"No paper-trading record of {strategy.name} on {detector.name} in {db}: the loop "
+            "has no step yet."
+        )
+    print("\n".join(paper.describe_report(reported)))
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -461,6 +543,34 @@ def build_parser() -> argparse.ArgumentParser:
             "the store; backtest-flip.json for the flip on three, slice 9's name)"
         ),
     )
+    trader = commands.add_parser(
+        "paper",
+        parents=[common],
+        help=(
+            "paper trading: run the loop on live candles with a simulated account under the "
+            "perpetual cost model until stopped, or `paper report` to read its record"
+        ),
+    )
+    trader.add_argument(
+        "report",
+        nargs="?",
+        choices=("report",),
+        default=None,
+        help="print the loop's record and its reconciliation instead of running the loop",
+    )
+    trader.add_argument(
+        "--detector",
+        default=DetectorThree.name,
+        help=(
+            "the detector in the loop; only one past its out-of-sample check may run: "
+            f"{', '.join(DETECTORS)} (default: three)"
+        ),
+    )
+    trader.add_argument(
+        "--strategy",
+        default="flip",
+        help=f"the strategy in the loop: {', '.join(STRATEGIES)} (default: flip)",
+    )
     return parser
 
 
@@ -485,3 +595,8 @@ def main(argv: list[str] | None = None) -> None:
             run_out_of_sample(args.db, args.detector, args.strategy, args.out)
         case "backtest":
             run_backtest(args.db, args.strategy, args.detector, args.recorded, args.out)
+        case "paper":
+            if args.report:
+                run_paper_report(args.db, args.detector, args.strategy)
+            else:
+                run_paper(args.db, args.detector, args.strategy)

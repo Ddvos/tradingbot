@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tradingbot.candles import Candle, Timeframe
+from tradingbot.candles import Candle, Timeframe, iso
 from tradingbot.cli import main
 from tradingbot.store import CandleStore
 
@@ -793,3 +793,123 @@ def test_out_of_sample_refuses_a_detector_already_in_the_log_in_both_forms(
         assert "out-of-sample.log" in str(stopped.value)
     assert not (tmp_path / "out-of-sample-three.json").exists()
     assert not (tmp_path / "out-of-sample-three-flip.json").exists()
+
+
+# --- paper trading (slice 11, ADR-0009) -----------------------------------------------------
+
+
+THREE_LOGGED = (
+    "2026-10-20T19:47:32Z\tthree\t68296 candles from 2024-10-19T00:00:00Z to "
+    "2026-09-30T23:45:00Z\tturning points 66, marks 752\n"
+)
+"""Detector three's line in the out-of-sample log (#28): past its check, it may paper trade."""
+
+
+def gapless_quarters(count: int, seed: int) -> list[Candle]:
+    """A seeded fifteen-minute walk with no missing candle, moves of up to 1.5% a quarter."""
+    rng = random.Random(seed)
+    candles: list[Candle] = []
+    close = 1000.0
+    for quarter in range(count):
+        open_ = close
+        close = open_ * (1 + rng.uniform(-0.015, 0.015))
+        high = max(open_, close) * (1 + rng.uniform(0, 0.005))
+        low = min(open_, close) * (1 - rng.uniform(0, 0.005))
+        candles.append(Candle(DAY_START + quarter * Q, open_, high, low, close, 1.0, 1))
+    return candles
+
+
+class FakeClock:
+    """`time` for the command: sleeping moves it, and the n-th sleep stops the loop."""
+
+    def __init__(self, now: int, stop_after: int) -> None:
+        self.now = float(now)
+        self.stop_after = stop_after
+        self.sleeps = 0
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps += 1
+        self.now += seconds
+        if self.sleeps == self.stop_after:
+            raise KeyboardInterrupt
+
+
+def test_paper_runs_the_loop_on_detector_three_and_paper_report_reads_the_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tradingbot import cli
+    from tradingbot.kraken_futures import MarkPrice
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "out-of-sample.log").write_text(THREE_LOGGED)
+    quarters = gapless_quarters(2500, seed=24)
+    db = tmp_path / "candles.sqlite"
+    with CandleStore(db, Timeframe.M15) as store:
+        store.upsert(quarters[:2400])
+
+    class FakeSpot:
+        def candles(self, timeframe: Timeframe, since: int | None) -> list[Candle]:
+            assert timeframe is Timeframe.M15
+            return [c for c in quarters if since is None or c.time >= since]
+
+    class FakeFutures:
+        def mark_price(self) -> MarkPrice:
+            return MarkPrice(1000.0, 0)
+
+        def funding_rates(self) -> dict[int, float]:
+            return {}
+
+    clock = FakeClock(quarters[2400].time + Q + 15, stop_after=60)
+    monkeypatch.setattr(cli, "KrakenSpot", FakeSpot)
+    monkeypatch.setattr(cli, "KrakenFutures", FakeFutures)
+    monkeypatch.setattr(cli, "time", clock)
+
+    main(["paper", "--db", str(db)])
+
+    out = capsys.readouterr().out
+    assert out.startswith("Paper trading flip on three. The store holds 2401 15-minute candles")
+    assert "stop it with Ctrl-C" in out
+    steps = [line for line in out.splitlines() if line.startswith("step ")]
+    assert len(steps) == 59, "one candle per sleep of 900 seconds, the last sleep stops it"
+    assert steps[0].startswith(f"step {iso(quarters[2401].time)}  close ")
+    assert "  account 500.00 USD  holding " in steps[0]
+    assert out.rstrip().endswith("starting the loop again continues from its last step.")
+
+    main(["paper", "report", "--db", str(db)])
+
+    printed = capsys.readouterr().out
+    assert printed.startswith(
+        f"Paper trading flip on three: 59 steps from {iso(quarters[2401].time)} to "
+        f"{iso(quarters[2459].time)}, "
+    )
+    assert "  account          " in printed and "  holding          " in printed
+    assert "  basis at hours   " in printed and "  funding          " in printed
+    assert "in the backtest over the same candles, 0 mismatches" in printed
+
+
+def test_paper_refuses_a_detector_without_its_out_of_sample_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "out-of-sample.log").write_text(THREE_LOGGED)
+    db = sixteen_hours_db(tmp_path)
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["paper", "--detector", "floor", "--db", str(db)])
+
+    message = str(stopped.value)
+    assert "floor" in message and "out-of-sample check" in message and "ADR-0009" in message
+
+
+def test_paper_report_says_when_the_loop_has_no_step_yet(tmp_path: Path) -> None:
+    db = tmp_path / "candles.sqlite"
+    with CandleStore(db, Timeframe.M15) as store:
+        store.upsert(gapless_quarters(8, seed=1))
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["paper", "report", "--db", str(db)])
+
+    assert "No paper-trading record of flip on three" in str(stopped.value)

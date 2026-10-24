@@ -18,6 +18,7 @@ from tradingbot.backtest import (
     backtest,
     describe_strategy_score,
     describe_verdict,
+    extremes_by_mark,
     fill_price,
     growth,
     halt,
@@ -507,3 +508,111 @@ def test_without_eras_the_bar_is_judged_over_the_period_as_one() -> None:
         "growth at least the benchmark's over the period as one under the perpetual cost "
         "model: pass (×1.28 vs ×0.992)",
     )
+
+
+# --- the walker, one candle at a time, and an account that starts later (slice 11) ------------
+
+
+def test_a_walker_stepped_one_candle_at_a_time_makes_the_fills_walk_makes() -> None:
+    from tradingbot.backtest import Walker, walk
+    from tradingbot.replay import Replayer
+
+    quarters = quarter_walk(hours=600, seed=24)
+    result = run(quarters, DetectorThree())
+    expected = walk(result, Flip())
+    detector = DetectorThree()
+    replayer = Replayer(detector)
+    walker = Walker(Flip(), account_from=quarters[0].time)
+
+    fills = []
+    for i, candle in enumerate(quarters):
+        step = replayer.push(candle, last=i == len(quarters) - 1)
+        mark = None
+        if step.mark is not None:
+            extreme = extremes_by_mark([step.mark], detector.swing_extremes())[step.mark.time]
+            mark = MarkWithExtreme(step.mark.kind, step.mark.time, step.mark.price, extreme)
+        stepped = walker.step(candle, step.completed, mark, step.confirmed)
+        if stepped.fill is not None:
+            fills.append(stepped.fill)
+
+    assert len(fills) > 4
+    assert fills == expected.fills
+    assert walker.closes == expected.closes
+    assert walker.hourly == expected.hourly
+    assert walker.funding == expected.funding
+    assert walker.long == expected.long
+
+
+def test_a_step_reports_the_hours_it_closed_with_the_funding_and_the_position_at_each() -> None:
+    from tradingbot.backtest import Walker
+    from tradingbot.replay import HourBuilder
+
+    candles = zigzag()
+    hours = HourBuilder(Timeframe.H1)
+    walker = Walker(Flip(), account_from=candles[0].time)
+    marks = {
+        t: MarkWithExtreme(k, t, float(ZIGZAG[(t - T0) // H]), None) for t, k in SCRIPT.items()
+    }
+
+    stepped = [
+        walker.step(c, hours.push(c, last=i == len(candles) - 1), marks.get(c.time), [])
+        for i, c in enumerate(candles)
+    ]
+
+    # Hour 4's close carries the bottom mark: an order, no fill yet, the account flat.
+    assert stepped[4].order is not None and stepped[4].order.side is Side.BUY
+    assert stepped[4].fill is None
+    assert [h.hour.time for h in stepped[4].hours] == [at(4)]
+    assert stepped[4].hours[0].btc["perpetual"] == 0.0
+    assert stepped[4].hours[0].funding["perpetual"] == 0.0
+    # Hour 5 fills the buy at its open, then closes with the position long: funding is due.
+    assert stepped[5].fill is not None and stepped[5].fill.side is Side.BUY
+    hour = stepped[5].hours[0]
+    assert hour.hour.time == at(5)
+    assert hour.btc["perpetual"] == pytest.approx(stepped[5].fill.cost(PERPETUAL).size)
+    assert hour.funding["perpetual"] == pytest.approx(hour.btc["perpetual"] * 93.0 * 0.0000125)
+    assert hour.values["perpetual"] == pytest.approx(walker.hourly.accounts["perpetual"][5])
+    assert hour.benchmark == pytest.approx(walker.hourly.benchmark[5])
+    assert walker.position is Position.FLAT, "sold at hour 31's open"
+
+
+def test_the_account_can_start_at_a_later_candle_than_the_scored_one() -> None:
+    from tradingbot.backtest import walk
+
+    result = run(zigzag(), Scripted(SCRIPT), score_from=SCORING_START)
+
+    walked = walk(result, Flip(), account_from=at(10))
+
+    # The marks at hours 4 and 8 are history: the first order follows the mark at hour 12.
+    assert [(f.side, f.time) for f in walked.fills][:2] == [
+        (Side.BUY, at(13)),
+        (Side.SELL, at(15)),
+    ]
+    assert walked.closes.times[0] == at(10)
+    assert walked.closes.accounts["perpetual"][0] == 500.0
+    # The benchmark bought at hour 10's open of 94 with one spot fill.
+    assert walked.closes.benchmark[0] == pytest.approx(500 / (1.0005 * 1.008))
+    assert walked.hourly.times[0] == at(10)
+
+
+def test_a_walker_without_an_account_start_treats_every_candle_as_history() -> None:
+    from tradingbot.backtest import Walker
+    from tradingbot.replay import HourBuilder
+
+    candles = zigzag()
+    hours = HourBuilder(Timeframe.H1)
+    walker = Walker(Flip())
+    marks = {
+        t: MarkWithExtreme(k, t, float(ZIGZAG[(t - T0) // H]), None) for t, k in SCRIPT.items()
+    }
+    for c in candles[:10]:
+        stepped = walker.step(c, hours.push(c), marks.get(c.time), [])
+        assert (stepped.fill, stepped.order, stepped.hours) == (None, None, ())
+    assert len(walker.seen) == 10 and [m.time for m in walker.marks_seen] == [at(4), at(8)]
+    assert walker.closes.times == [] and walker.hourly.times == []
+
+    walker.account_from = candles[10].time
+    stepped = walker.step(candles[10], hours.push(candles[10]), None, [])
+
+    assert walker.closes.times == [at(10)] and stepped.order is None
+    assert walker.benchmark.btc > 0, "holding bought at the account's first candle"

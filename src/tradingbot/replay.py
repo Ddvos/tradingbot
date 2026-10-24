@@ -14,7 +14,10 @@ turning-point finder before the detector sees the candle, so a turning point
 confirmed by the hour a candle completes is visible to the detector on that
 candle (ADR-0006).
 
-`replay_all` replays a whole series and keeps everything the replay produced;
+`Replayer` is the replay one candle at a time: `push` answers the step for the
+candle pushed, so the paper loop (slice 11) can feed it live candles as they
+close; `replay` drives it over a whole series. `replay_all` replays a whole
+series and keeps everything the replay produced;
 `score_replayed` scores that under the tolerance, the scoring period and the
 eras. `run` is both in one. The result records the whole run, every candle
 the detector read and every mark it placed, so the run can be re-scored under
@@ -86,33 +89,50 @@ class Step:
     """The hourly candles this candle completed: itself for an hourly detector."""
 
 
+class Replayer:
+    """The replay one candle at a time: `push` hands the detector the next candle of its
+    timeframe and answers the step, the hours the candle completed and the turning points
+    they confirmed included. Candles must come in time order and start on a period of the
+    detector's timeframe; `last` says the candle ends the series, so it completes its hour.
+    A series fed live never ends, so its forming hour is never completed."""
+
+    def __init__(self, detector: Detector) -> None:
+        self._detector = detector
+        self._seen: list[Candle] = []
+        self._levels: list[TurningPoint] = []
+        self._finder = TurningPointFinder(detector.reversal)
+        self._hours = HourBuilder(detector.timeframe)
+        self._size = detector.timeframe.seconds
+
+    def push(self, candle: Candle, *, last: bool = False) -> Step:
+        seen = self._seen
+        if seen and candle.time <= seen[-1].time:
+            raise ValueError(
+                f"candles must be in time order; {candle.time} follows {seen[-1].time}"
+            )
+        if candle.time % self._size:
+            timeframe = self._detector.timeframe.value
+            raise ValueError(f"{candle.time} does not start a {timeframe} candle")
+        seen.append(candle)
+        completed = self._hours.push(candle, last=last)
+        confirmed = [point for hour in completed for point in self._finder.push(hour)]
+        self._levels.extend(confirmed)
+        kind = self._detector.mark(seen, self._levels)
+        mark = Mark(kind, candle.time, candle.close) if kind is not None else None
+        return Step(candle, mark, tuple(confirmed), self._finder.pending_from, tuple(completed))
+
+
 def replay(candles: Iterable[Candle], detector: Detector) -> Iterator[Step]:
     """One step per candle of the detector's timeframe, oldest first.
 
     Candles must be in time order and start on a period of that timeframe.
     """
-    seen: list[Candle] = []
-    levels: list[TurningPoint] = []
-    finder = TurningPointFinder(detector.reversal)
-    hours = HourBuilder(detector.timeframe)
-    size = detector.timeframe.seconds
+    replayer = Replayer(detector)
     iterator = iter(candles)
     following = next(iterator, None)
     while following is not None:
         candle, following = following, next(iterator, None)
-        if seen and candle.time <= seen[-1].time:
-            raise ValueError(
-                f"candles must be in time order; {candle.time} follows {seen[-1].time}"
-            )
-        if candle.time % size:
-            raise ValueError(f"{candle.time} does not start a {detector.timeframe.value} candle")
-        seen.append(candle)
-        completed = hours.push(candle, last=following is None)
-        confirmed = [point for hour in completed for point in finder.push(hour)]
-        levels.extend(confirmed)
-        kind = detector.mark(seen, levels)
-        mark = Mark(kind, candle.time, candle.close) if kind is not None else None
-        yield Step(candle, mark, tuple(confirmed), finder.pending_from, tuple(completed))
+        yield replayer.push(candle, last=following is None)
 
 
 @dataclass(frozen=True)
